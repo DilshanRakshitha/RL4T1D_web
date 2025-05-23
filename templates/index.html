@@ -14,9 +14,19 @@
         .meal-entry { margin-bottom: 5px; }
         .meal-entry input { margin-right: 5px; width: 80px; }
         button { padding: 8px 15px; margin-right: 10px; cursor: pointer; }
-        #status { padding: 10px; border: 1px solid #eee; background-color: #f9f9f9; }
+        #status-message { padding: 10px; border: 1px solid #eee; background-color: #f9f9f9; min-height: 20px;}
         .error { color: red; font-weight: bold; }
         .metadata { font-size: 0.9em; color: #555; }
+        .progress { font-style: italic; color: #337ab7; } 
+        .info { color: black; } 
+        .highcharts-plot-line-label.meal-label { 
+            font-size: 9px !important; 
+            fill: #c0392b !important; 
+            font-weight: bold !important;
+            background-color: rgba(255, 255, 255, 0.7); /* Optional: slight background for readability */
+            padding: 2px;
+            border-radius: 2px;
+        }
     </style>
 </head>
 <body>
@@ -28,6 +38,9 @@
             <div class="meal-entry">
                 Meal 1: Time (min from start): <input type="number" class="meal-time" value="480"> Carbs (g): <input type="number" class="meal-carbs" value="50">
             </div>
+             <div class="meal-entry">
+                Meal 2: Time (min from start): <input type="number" class="meal-time" value="720"> Carbs (g): <input type="number" class="meal-carbs" value="30">
+            </div>
         </div>
         <button id="add-meal-btn">Add Another Meal</button>
         <hr>
@@ -37,7 +50,7 @@
 
     <div class="status">
         <h2>Status</h2>
-        <div id="status-message">Not connected.</div>
+        <div id="status-message" class="info">Not connected.</div>
         <div id="patient-metadata" class="metadata"></div>
     </div>
 
@@ -65,16 +78,14 @@
             let samplingRate = 5; 
             let maxPointsPerDay; 
 
-            let currentMinStep = 0; 
-
             function calculateMaxPoints() {
                 maxPointsPerDay = SIM_DURATION_MINUTES_PER_SEGMENT / samplingRate;
             }
             calculateMaxPoints(); 
 
-            function updateStatus(message, isError = false) {
+            function updateStatus(message, type = 'info') { 
                 statusMessageDiv.textContent = message;
-                statusMessageDiv.className = isError ? 'error' : '';
+                statusMessageDiv.className = type; 
             }
 
             function initCharts() {
@@ -87,13 +98,14 @@
                     title: { text: null },
                     xAxis: {
                         type: 'linear',
-                        title: { text: 'Simulation Step' },
+                        title: { text: 'Simulation Step (Global)' }, // X-axis is global step
+                        plotLines: [] 
                     },
                     credits: { enabled: false },
                     legend: { enabled: true },
                     plotOptions: {
                         line: { marker: { enabled: false } },
-                        column: { pointPadding: 0, borderWidth: 0, groupPadding: 0.1}
+                        column: { pointPadding: 0, borderWidth: 0, groupPadding: 0.1, color: 'rgba(124, 181, 236, 0.5)' } 
                     },
                 };
 
@@ -104,24 +116,28 @@
                             title: { text: 'CGM (mg/dL)' },
                             min: 0, max: 400, 
                              plotLines: [{
-                                value: 70, color: 'red', dashStyle: 'shortdash', width: 1, label: { text: 'Hypo (70)'}
+                                value: 70, color: 'red', dashStyle: 'shortdash', width: 1, zIndex: 3, label: { text: 'Hypo (70)'}
                             }, {
-                                value: 180, color: 'orange', dashStyle: 'shortdash', width: 1, label: { text: 'Hyper (180)'}
+                                value: 180, color: 'orange', dashStyle: 'shortdash', width: 1, zIndex: 3, label: { text: 'Hyper (180)'}
                             }]
                         },
-                        { 
-                            title: { text: 'Meal (carbs g)' },
-                            opposite: true,
-                            min: 0
-                        }
+                        // Remove secondary Y-axis for meal bars if plotLines are primary
+                        // { 
+                        //     title: { text: 'Meal (carbs g)' },
+                        //     opposite: true,
+                        //     min: 0,
+                        //     gridLineWidth: 0 
+                        // }
                     ],
                     series: [
-                        { name: 'PPO CGM', type: 'line', yAxis: 0, data: [] },
-                        { name: 'PCPO CGM', type: 'line', yAxis: 0, data: [] },
-                        { name: 'Meal (Carbs)', type: 'column', yAxis: 1, data: [], tooltip: { valueSuffix: ' g' } }
+                        { name: 'PPO CGM', type: 'line', yAxis: 0, data: [], zIndex: 2 },
+                        { name: 'PCPO CGM', type: 'line', yAxis: 0, data: [], zIndex: 2 },
+                        // Remove this series if you're only using plotLines for meals
+                        // { name: 'Meal Data (Carbs)', type: 'column', yAxis: 1, data: [], tooltip: { valueSuffix: ' g' }, zIndex: 1 }
                     ]
                 }));
 
+                // ... (insulinChart and rewardChart init remain the same) ...
                 insulinChart = Highcharts.chart('insulin-chart-container', Highcharts.merge(commonChartOptions, {
                     title: { text: 'Insulin Delivery' },
                     yAxis: { title: { text: 'Insulin (U)' }, min: 0 },
@@ -141,20 +157,33 @@
                 }));
             }
             
+            function removeAllMealPlotLines(chart) {
+                if (chart && chart.xAxis && chart.xAxis[0]) {
+                    let xAxis = chart.xAxis[0];
+                    for (let i = xAxis.plotLinesAndBands.length - 1; i >= 0; i--) {
+                        if (xAxis.plotLinesAndBands[i].options.id && xAxis.plotLinesAndBands[i].options.id.startsWith('meal-line-')) {
+                            xAxis.removePlotLine(xAxis.plotLinesAndBands[i].options.id);
+                        }
+                    }
+                }
+            }
+
             function resetCharts() {
-                currentMinStep = 0; 
                 if (cgmChart) {
                     cgmChart.series.forEach(s => s.setData([], false));
+                    removeAllMealPlotLines(cgmChart);
                     cgmChart.xAxis[0].setExtremes(null, null, false); 
                     cgmChart.redraw();
                 }
                 if (insulinChart) {
                     insulinChart.series.forEach(s => s.setData([], false));
+                     removeAllMealPlotLines(insulinChart); // If you add meal lines to other charts
                     insulinChart.xAxis[0].setExtremes(null, null, false);
                     insulinChart.redraw();
                 }
                 if (rewardChart) {
                     rewardChart.series.forEach(s => s.setData([], false));
+                     removeAllMealPlotLines(rewardChart); // If you add meal lines to other charts
                     rewardChart.xAxis[0].setExtremes(null, null, false);
                     rewardChart.redraw();
                 }
@@ -162,7 +191,8 @@
 
             initCharts();
 
-            addMealBtn.addEventListener('click', function () {
+            // ... (addMealBtn and startSimBtn event listeners remain the same) ...
+             addMealBtn.addEventListener('click', function () {
                 const mealCount = mealScheduleDiv.children.length + 1;
                 const newMealEntry = document.createElement('div');
                 newMealEntry.className = 'meal-entry';
@@ -174,7 +204,7 @@
 
             startSimBtn.addEventListener('click', function () {
                 const mealEntries = mealScheduleDiv.getElementsByClassName('meal-entry');
-                const meals = [];
+                const meals = []; // This will be array of {time_minutes: X, carbs: Y}
                 for (let entry of mealEntries) {
                     const timeInput = entry.querySelector('.meal-time');
                     const carbsInput = entry.querySelector('.meal-carbs');
@@ -189,21 +219,22 @@
                     }
                 }
                 
-                updateStatus('Starting simulation...');
+                updateStatus('Starting simulation...', 'info');
                 resetCharts(); 
-                socket.emit('start_continuous_simulation', { meals: meals });
+                socket.emit('start_continuous_simulation', { meals: meals }); // Send structured meal data
                 startSimBtn.disabled = true;
                 stopSimBtn.disabled = false;
             });
 
             stopSimBtn.addEventListener('click', function () {
-                updateStatus('Sending stop signal...');
+                updateStatus('Sending stop signal...', 'info');
                 socket.emit('stop_continuous_simulation');
             });
 
-            socket.on('connect', function () { updateStatus('Connected to server.'); });
+            // ... (socket.on 'connect', 'disconnect', 'connection_ack', 'simulation_metadata', 'simulation_starting_continuous', 'simulation_progress' remain same)
+            socket.on('connect', function () { updateStatus('Connected to server.', 'info'); });
             socket.on('disconnect', function () {
-                updateStatus('Disconnected from server.', true);
+                updateStatus('Disconnected from server.', 'error');
                 startSimBtn.disabled = false;
                 stopSimBtn.disabled = true;
             });
@@ -217,17 +248,49 @@
             });
 
             socket.on('simulation_starting_continuous', function (data) {
-                updateStatus(data.message);
+                updateStatus(data.message, 'info');
                 console.log("Simulation starting (continuous)...");
             });
 
-            socket.on('simulation_data_point', function (data) {
-                const step = data.step;
-                let redraw = false; 
-                let shift = false;
-                if (cgmChart.series[0].data.length >= maxPointsPerDay) {
-                    shift = true;
+            socket.on('simulation_progress', function(data) {
+                console.log('Simulation Progress:', data.message);
+                updateStatus(data.message, 'progress');
+            });
+            
+            // New handler for meal markers
+            socket.on('meal_markers', function(data) {
+                console.log("Received meal markers:", data.markers);
+                if (cgmChart && cgmChart.xAxis && cgmChart.xAxis[0]) {
+                    removeAllMealPlotLines(cgmChart); // Clear old meal lines first
+                    data.markers.forEach(marker => {
+                        cgmChart.xAxis[0].addPlotLine({
+                            value: marker.step,
+                            color: '#e74c3c', // Brighter Red
+                            width: 1.5,
+                            dashStyle: 'Dot', // Dotted line
+                            id: `meal-line-${marker.step}`,
+                            zIndex: 4,
+                            label: {
+                                text: `${marker.carbs.toFixed(0)}g`,
+                                align: 'center',
+                                y: 12, // Position below the line
+                                style: { color: '#c0392b', },
+                                className: 'meal-label'
+                            }
+                        });
+                    });
                 }
+            });
+
+
+            socket.on('simulation_data_point', function (data) {
+                if (statusMessageDiv.classList.contains('progress')) {
+                    updateStatus('Simulation running...', 'info');
+                }
+
+                const step = data.step;
+                let redrawRequired = false; 
+                let shift = (cgmChart.series[0].data.length >= maxPointsPerDay);
                 
                 if (cgmChart && cgmChart.series) {
                     if (data.hasOwnProperty('ppo_cgm')) {
@@ -236,10 +299,12 @@
                     if (data.hasOwnProperty('pcpo_cgm')) {
                         cgmChart.series[1].addPoint([step, data.pcpo_cgm], false, shift, true);
                     }
-                    if (data.hasOwnProperty('meal') && data.meal > 0) {
-                        cgmChart.series[2].addPoint([step, data.meal], false, shift, true);
-                    }
-                    redraw = true;
+                    // The meal data from data.meal is for the column series, if you keep it.
+                    // The plotLines are now handled by the 'meal_markers' event.
+                    // if (data.hasOwnProperty('meal') && cgmChart.series[2]) { 
+                    //      cgmChart.series[2].addPoint([step, data.meal > 0 ? data.meal : null], false, shift, true);
+                    // }
+                    redrawRequired = true;
                 }
 
                 if (insulinChart && insulinChart.series) {
@@ -249,7 +314,7 @@
                     if (data.hasOwnProperty('pcpo_insulin')) {
                         insulinChart.series[1].addPoint([step, data.pcpo_insulin], false, shift, true);
                     }
-                    redraw = true;
+                    redrawRequired = true;
                 }
 
                 if (rewardChart && rewardChart.series) {
@@ -259,12 +324,15 @@
                     if (data.hasOwnProperty('pcpo_reward')) {
                         rewardChart.series[1].addPoint([step, data.pcpo_reward], false, shift, true);
                     }
-                    redraw = true;
+                    redrawRequired = true;
                 }
                 
-                if (redraw) {
+                if (redrawRequired) {
                     const currentMaxStep = step; 
-                    const newMinStep = Math.max(0, currentMaxStep - maxPointsPerDay +1);
+                    const newMinStep = Math.max(0, currentMaxStep - maxPointsPerDay + 1);
+
+                    // We don't need to remove meal plotlines here anymore if they are managed by 'meal_markers' event
+                    // and setExtremes. Highcharts will hide lines outside the extremes.
 
                     cgmChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
                     insulinChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
@@ -276,24 +344,25 @@
                 }
             });
 
-            socket.on('segment_complete', function(data) {
+            // ... (segment_complete, simulation_finished, etc. handlers remain the same) ...
+             socket.on('segment_complete', function(data) {
                 console.log(`Segment ${data.segment_number} complete (${data.steps_in_segment} steps).`);
-                updateStatus(`Segment ${data.segment_number} processed.`);
+                // Backend will emit new meal_markers for the next view window before streaming next segment
             });
 
             socket.on('simulation_finished', function (data) {
-                updateStatus(data.message || 'Simulation finished.');
+                updateStatus(data.message || 'Simulation finished.', 'info');
                 startSimBtn.disabled = false;
                 stopSimBtn.disabled = true;
             });
 
             socket.on('simulation_stopping_ack', function(data) {
-                updateStatus(data.message);
+                updateStatus(data.message, 'info');
                 console.log("Simulation stopping ack received.");
             });
 
             socket.on('simulation_error', function (data) {
-                updateStatus(`Error: ${data.error}`, true);
+                updateStatus(`Error: ${data.error}`, 'error');
                 console.error('Simulation Error:', data.error);
                 startSimBtn.disabled = false;
                 stopSimBtn.disabled = true;
