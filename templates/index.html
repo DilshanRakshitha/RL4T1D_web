@@ -2,169 +2,317 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>T1D Simulation</title>
+    <title>Glucose Simulation</title>
+    <!-- Using specific compatible versions -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.4.0/dist/chartjs-plugin-annotation.min.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
-        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        h1, h2 { color: #333; }
-        label { display: block; margin-top: 10px; font-weight: bold; }
-        input[type="number"], input[type="text"] { 
-            width: calc(100% - 22px); 
-            padding: 10px; 
-            margin-top: 5px; 
-            border: 1px solid #ddd; 
-            border-radius: 4px; 
-            box-sizing: border-box;
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
         }
-        button { 
-            background-color: #007bff; 
-            color: white; 
-            padding: 10px 15px; 
-            border: none; 
-            border-radius: 4px; 
-            cursor: pointer; 
-            font-size: 16px;
+        .meal-entry {
+            border: 1px solid #eee;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-top: 5px;
+            margin-bottom: 2px;
+        }
+        input[type="number"] {
+            width: 95%;
+            padding: 8px;
+            margin-bottom: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #plot-container {
+            width: 100%;
+            max-width: 900px; /* Adjusted max-width */
+            height: 450px;   /* Adjusted height */
             margin-top: 20px;
+            border: 1px solid #ddd;
         }
-        button:hover { background-color: #0056b3; }
-        .meal-entry { margin-bottom: 15px; padding: 10px; border: 1px solid #eee; border-radius: 4px; }
-        .results, .plot-container { margin-top: 20px; padding: 15px; background-color: #e9e9e9; border-radius: 4px; }
-        img#simulationPlot { max-width: 100%; height: auto; border: 1px solid #ccc; }
-        pre { background-color: #f0f0f0; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; }
-        #loadingMessage { display: none; color: #007bff; font-weight: bold; margin-top: 10px;}
+        pre {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            padding: 10px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        hr {
+            margin: 20px 0;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Type 1 Diabetes Simulation</h1>
+    <h1>Glucose Simulation Interface</h1>
 
-        <h2>Meal Schedule</h2>
-        <div id="mealInputs">
-            <div class="meal-entry">
-                <label for="mealTime1">Meal 1 Time (minutes from start, e.g., 480 for 8 AM):</label>
-                <input type="number" id="mealTime1" value="480">
-                <label for="mealCarbs1">Meal 1 Carbs (grams):</label>
-                <input type="number" id="mealCarbs1" value="50">
-            </div>
-            <div class="meal-entry">
-                <label for="mealTime2">Meal 2 Time (minutes from start):</label>
-                <input type="number" id="mealTime2" value="720">
-                <label for="mealCarbs2">Meal 2 Carbs (grams):</label>
-                <input type="number" id="mealCarbs2" value="70">
-            </div>
-            <div class="meal-entry">
-                <label for="mealTime3">Meal 3 Time (minutes from start):</label>
-                <input type="number" id="mealTime3" value="1080">
-                <label for="mealCarbs3">Meal 3 Carbs (grams):</label>
-                <input type="number" id="mealCarbs3" value="60">
-            </div>
+    <h2>Meal Schedule</h2>
+    <div id="meals-container">
+        <!-- Initial meal entry -->
+        <div class="meal-entry">
+            <label for="meal-time-1">Meal Time 1 (minutes from start, e.g., 480 for 8 AM):</label>
+            <input type="number" id="meal-time-1" class="meal-time" value="480" placeholder="e.g., 480">
+            <label for="meal-carbs-1">Carbohydrates 1 (grams):</label>
+            <input type="number" id="meal-carbs-1" class="meal-carbs" value="50" placeholder="e.g., 50">
         </div>
-        <button type="button" onclick="addMealInput()">Add Another Meal</button>
-        
-        <button onclick="runSimulation()">Run Simulation</button>
-        <p id="loadingMessage">Running simulation, please wait...</p>
+    </div>
+    <button type="button" onclick="addMealEntry()">Add Another Meal</button>
+    <hr>
+    <button type="button" onclick="runSimulationAndPlot()">Run Simulation</button>
 
-        <h2>Simulation Plot</h2>
-        <div class="plot-container">
-            <img id="simulationPlot" src="" alt="Simulation Plot Will Appear Here">
-        </div>
+    <div id="plot-container">
+        <canvas id="simulationChart"></canvas>
+    </div>
 
-        <h2>Raw Results</h2>
-        <div class="results">
-            <h3>PPO Agent</h3>
-            <pre id="ppoResults">PPO results will appear here.</pre>
-        </div>
-        <div class="results">
-            <h3>PCPO Agent</h3>
-            <pre id="pcpoResults">PCPO results will appear here.</pre>
-        </div>
+    <div id="text-results-container" style="display:none; margin-top:20px;">
+        <h2>Simulation Data (Raw)</h2>
+        <h3>PPO Simulation:</h3>
+        <pre id="ppo-results-json"></pre>
+        <h3>PCPO Simulation:</h3>
+        <pre id="pcpo-results-json"></pre>
     </div>
 
     <script>
-        let mealCount = 3;
+        let mealCount = 1;
 
-        function addMealInput() {
+        function addMealEntry() {
             mealCount++;
-            const mealInputsDiv = document.getElementById('mealInputs');
+            const mealsContainer = document.getElementById('meals-container');
             const newMealEntry = document.createElement('div');
-            newMealEntry.className = 'meal-entry';
+            newMealEntry.classList.add('meal-entry');
             newMealEntry.innerHTML = `
-                <label for="mealTime${mealCount}">Meal ${mealCount} Time (minutes from start):</label>
-                <input type="number" id="mealTime${mealCount}">
-                <label for="mealCarbs${mealCount}">Meal ${mealCount} Carbs (grams):</label>
-                <input type="number" id="mealCarbs${mealCount}">
+                <label for="meal-time-${mealCount}">Meal Time ${mealCount} (minutes from start):</label>
+                <input type="number" id="meal-time-${mealCount}" class="meal-time" placeholder="e.g., 720 for 12 PM">
+                <label for="meal-carbs-${mealCount}">Carbohydrates ${mealCount} (grams):</label>
+                <input type="number" id="meal-carbs-${mealCount}" class="meal-carbs" placeholder="e.g., 70">
             `;
-            mealInputsDiv.appendChild(newMealEntry);
+            mealsContainer.appendChild(newMealEntry);
         }
 
-        async function runSimulation() {
-            const meals = [];
-            for (let i = 1; i <= mealCount; i++) {
-                const timeInput = document.getElementById(`mealTime${i}`);
-                const carbsInput = document.getElementById(`mealCarbs${i}`);
-                if (timeInput && carbsInput && timeInput.value && carbsInput.value) {
-                    meals.push({
+        async function runSimulationAndPlot() {
+            const mealEntries = document.querySelectorAll('.meal-entry');
+            const meal_details_input = [];
+            mealEntries.forEach(entry => {
+                const timeInput = entry.querySelector('.meal-time');
+                const carbsInput = entry.querySelector('.meal-carbs');
+                if (timeInput.value && carbsInput.value) {
+                    meal_details_input.push({
                         time_minutes: parseInt(timeInput.value),
                         carbs: parseFloat(carbsInput.value)
                     });
                 }
+            });
+
+            const fetchPayload = { meals: meal_details_input };
+
+            document.getElementById('text-results-container').style.display = 'none';
+            const ppoJsonElement = document.getElementById('ppo-results-json');
+            const pcpoJsonElement = document.getElementById('pcpo-results-json');
+            ppoJsonElement.textContent = 'Running...';
+            pcpoJsonElement.textContent = 'Running...';
+
+            if (window.simulationChart instanceof Chart) {
+                window.simulationChart.destroy();
             }
-
-            if (meals.length === 0) {
-                alert("Please enter at least one meal.");
-                return;
-            }
-
-            document.getElementById('loadingMessage').style.display = 'block';
-            document.getElementById('simulationPlot').src = ""; // Clear previous plot
-            document.getElementById('ppoResults').textContent = "Loading PPO results...";
-            document.getElementById('pcpoResults').textContent = "Loading PCPO results...";
-
 
             try {
                 const response = await fetch('/simulate', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ meals: meals }),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(fetchPayload)
                 });
-
-                document.getElementById('loadingMessage').style.display = 'none';
+                
+                const results = await response.json();
 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-                }
-
-                const data = await response.json();
-
-                if (data.ppo_simulation) {
-                    document.getElementById('ppoResults').textContent = JSON.stringify(data.ppo_simulation, null, 2);
-                } else {
-                    document.getElementById('ppoResults').textContent = "No PPO data returned or error in PPO simulation.";
-                }
-
-                if (data.pcpo_simulation) {
-                    document.getElementById('pcpoResults').textContent = JSON.stringify(data.pcpo_simulation, null, 2);
-                } else {
-                     document.getElementById('pcpoResults').textContent = "No PCPO data returned or error in PCPO simulation.";
+                    throw new Error(results.error || `HTTP error! status: ${response.status}`);
                 }
                 
-                if (data.plot_image_base64) {
-                    document.getElementById('simulationPlot').src = data.plot_image_base64;
-                } else {
-                    document.getElementById('simulationPlot').alt = "Plot could not be generated.";
+                if (results.error) {
+                    alert("Error from server: " + results.error);
+                    ppoJsonElement.textContent = `Error: ${results.error}`;
+                    pcpoJsonElement.textContent = `Error: ${results.error}`;
+                    return;
                 }
+                
+                document.getElementById('text-results-container').style.display = 'block';
+                ppoJsonElement.textContent = JSON.stringify(results.ppo_simulation, null, 2);
+                pcpoJsonElement.textContent = JSON.stringify(results.pcpo_simulation, null, 2);
+                
+                plotResultsWithChartJS(results.ppo_simulation, results.pcpo_simulation, results.sim_sampling_rate);
 
             } catch (error) {
-                document.getElementById('loadingMessage').style.display = 'none';
-                console.error('Error:', error);
-                alert('Error during simulation: ' + error.message);
-                document.getElementById('ppoResults').textContent = "Error: " + error.message;
-                document.getElementById('pcpoResults').textContent = "Error: " + error.message;
+                console.error('Simulation or plotting error:', error);
+                alert('Failed to run simulation: ' + error.message);
+                ppoJsonElement.textContent = `Error: ${error.message}`;
+                pcpoJsonElement.textContent = `Error: ${error.message}`;
             }
+        }
+
+        function plotResultsWithChartJS(ppoData, pcpoData, SIM_SAMPLING_RATE = 5) {
+            let timeLabels = [];
+            const ppoValid = ppoData && !ppoData.error && ppoData.cgm && ppoData.cgm.length > 0;
+            const pcpoValid = pcpoData && !pcpoData.error && pcpoData.cgm && pcpoData.cgm.length > 0;
+
+            let referenceData = null;
+            if (ppoValid) referenceData = ppoData;
+            else if (pcpoValid) referenceData = pcpoData;
+
+            if (!referenceData) {
+                console.error("No valid CGM data to plot from either PPO or PCPO.");
+                if (window.simulationChart instanceof Chart) {
+                    window.simulationChart.destroy();
+                }
+                const ctx = document.getElementById('simulationChart').getContext('2d');
+                ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+                ctx.font = "16px Arial";
+                ctx.fillStyle = "red";
+                ctx.textAlign = "center";
+                ctx.fillText("No data to display or simulation error.", ctx.canvas.width/2, ctx.canvas.height/2);
+                return;
+            }
+            
+            timeLabels = referenceData.cgm.map((_, index) => (index * SIM_SAMPLING_RATE) / 60);
+            const patientName = referenceData.patient_name || "N/A";
+
+            const datasets = [];
+            const yAxesConfig = {};
+            
+            if (ppoValid) {
+                datasets.push({
+                    label: 'PPO CGM (mg/dL)', data: ppoData.cgm, borderColor: '#1f77b4', 
+                    yAxisID: 'yCGM', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5
+                });
+                if (ppoData.insulin) {
+                    datasets.push({
+                        label: 'PPO Insulin (U/step)', data: ppoData.insulin, borderColor: 'rgba(31, 119, 180, 0.7)', 
+                        borderDash: [5, 5], yAxisID: 'yInsulin', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5
+                    });
+                }
+            } else if (ppoData && ppoData.error) {
+                 console.warn("PPO Simulation Error:", ppoData.error);
+            }
+
+            if (pcpoValid) {
+                 datasets.push({
+                    label: 'PCPO CGM (mg/dL)', data: pcpoData.cgm, borderColor: '#ff7f0e', 
+                    yAxisID: 'yCGM', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5
+                });
+                if (pcpoData.insulin) {
+                     datasets.push({
+                        label: 'PCPO Insulin (U/step)', data: pcpoData.insulin, borderColor: 'rgba(255, 127, 14, 0.7)', 
+                        borderDash: [5, 5], yAxisID: 'yInsulin', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5
+                    });
+                }
+            } else if (pcpoData && pcpoData.error) {
+                console.warn("PCPO Simulation Error:", pcpoData.error);
+            }
+
+            yAxesConfig.yCGM = {
+                type: 'linear', display: true, position: 'left',
+                title: { display: true, text: 'CGM (mg/dL)', font: { weight: 'bold'} },
+                suggestedMin: 0, suggestedMax: 400, // Or make dynamic
+                ticks: { color: '#000080' }
+            };
+            yAxesConfig.yInsulin = {
+                type: 'linear', display: true, position: 'right',
+                title: { display: true, text: 'Insulin (U/step)', font: { weight: 'bold'} },
+                grid: { drawOnChartArea: false }, suggestedMin: 0,
+                ticks: { color: 'mediumseagreen' }
+            };
+            
+            let commonMealDataArray = null;
+            if (ppoValid && ppoData.meal) commonMealDataArray = ppoData.meal;
+            else if (pcpoValid && pcpoData.meal) commonMealDataArray = pcpoData.meal;
+
+            if (commonMealDataArray) {
+                const mealAmountsForChart = commonMealDataArray.map(m => m > 0 ? m : NaN);
+                const maxMeal = Math.max(...commonMealDataArray.filter(m => m > 0), 0);
+
+                datasets.push({
+                    label: 'Meals CHO (g)', data: mealAmountsForChart, backgroundColor: 'rgba(128, 0, 0, 0.6)', 
+                    yAxisID: 'yMeals', type: 'bar', barPercentage: 0.3, categoryPercentage: 0.5
+                });
+                yAxesConfig.yMeals = {
+                    type: 'linear', display: true, position: 'right',
+                    title: { display: true, text: 'CHO (g)', font: { weight: 'bold'} },
+                    grid: { drawOnChartArea: false },
+                    offset: true, 
+                    suggestedMin: 0,
+                    suggestedMax: maxMeal > 0 ? maxMeal * 1.2 : 10,
+                    ticks: { color: '#800000' }
+                };
+            }
+            
+            const chartData = {
+                labels: timeLabels,
+                datasets: datasets
+            };
+
+            if (window.simulationChart instanceof Chart) {
+                window.simulationChart.destroy();
+            }
+
+            const ctx = document.getElementById('simulationChart').getContext('2d');
+            window.simulationChart = new Chart(ctx, {
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false, axis: 'x' },
+                    plugins: {
+                        title: { display: true, text: `Simulation Results for Patient ID ${patientName}`, font: { size: 16 } },
+                        legend: { position: 'top', labels: { usePointStyle: true } },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) label += ': ';
+                                    if (context.parsed.y !== null) label += context.parsed.y.toFixed(2);
+                                    if (context.dataset.type === 'bar' && isNaN(context.parsed.y)) return null; 
+                                    return label;
+                                }
+                            }
+                        },
+                        annotation: { 
+                            annotations: {
+                                line70: { type: 'line', yScaleID: 'yCGM', value: 70, borderColor: 'red', borderWidth: 1.5, borderDash: [5, 5], label: { content: 'Hypo (<70)', enabled: true, position: "start", font: {style: 'italic'}}},
+                                line180: { type: 'line', yScaleID: 'yCGM', value: 180, borderColor: 'darkorange', borderWidth: 1.5, borderDash: [5, 5], label: { content: 'Hyper (>180)', enabled: true, position: "start", font: {style: 'italic'}}},
+                                line250: { type: 'line', yScaleID: 'yCGM', value: 250, borderColor: 'maroon', borderWidth: 1.5, borderDash: [2, 2], label: { content: 'Severe Hyper (>250)', enabled: true, position: "start", font: {style: 'italic'}}},
+                                boxNormo: { type: 'box', yScaleID: 'yCGM', yMin: 70, yMax: 180, backgroundColor: 'rgba(75, 192, 75, 0.1)', borderColor: 'transparent' }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { 
+                            title: { display: true, text: `Time (hours) - Each step = ${SIM_SAMPLING_RATE} min`, font: { weight: 'bold'} },
+                            grid: { display: false }
+                        },
+                        ...yAxesConfig
+                    }
+                }
+            });
         }
     </script>
 </body>

@@ -22,23 +22,16 @@ import base64
 from agents.models.actor_critic import ActorCritic
 from utils.worker import OnPolicyWorker
 
-# Flask app instance
-# The `template_folder` argument tells Flask where to look for HTML templates.
-# By default, it looks for a folder named 'templates' in the same directory as app.py.
-# If your app.py is at the root of 'rl4hcpo-rl4t1d', and you create 'rl4hcpo-rl4t1d/templates/index.html',
-# then template_folder='templates' is implicitly correct.
 app = Flask(__name__, template_folder='templates') 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(filename)s:%(lineno)d %(message)s')
 
-# ... (Global configurations, get_simulation_args, configure_custom_scenario_args, run_simulation_for_agent, plot_simulation_results_to_base64
-#      remain the same as your last corrected version from the previous step) ...
 MODEL_DIR = "./models/" 
 PPO_MODEL_FILENAME_BASE = "ppo_model_for_patient_{}" 
 PCPO_MODEL_FILENAME_BASE = "pcpo_model_for_patient_{}"
 SIM_PATIENT_NAME_STR = '0' 
 SIM_DURATION_MINUTES = 24 * 60
-SIM_SAMPLING_RATE = 5
+SIM_SAMPLING_RATE = 5 # This will be sent to the frontend
 
 if not os.path.exists(MODEL_DIR):
     os.makedirs(MODEL_DIR)
@@ -131,7 +124,7 @@ def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_t
     api_worker_id = abs(hash(base_args.experiment_folder)) % 10000 + 8000 
     try:
         logging.info(f"Creating OnPolicyWorker with args for patient_name: '{worker_args.patient_name}' (int_id: {worker_args.patient_id})")
-        worker = OnPolicyWorker(args=worker_args, env_args=worker_args, mode='testing', worker_id=api_worker_id) # Pass worker_args as env_args too
+        worker = OnPolicyWorker(args=worker_args, env_args=worker_args, mode='testing', worker_id=api_worker_id)
         logging.info(f"Starting worker.rollout for patient_name '{worker_args.patient_name}', worker_id {api_worker_id}")
         worker.rollout(policy=policy_net, buffer=None) 
         logging.info(f"Finished worker.rollout for worker_id {api_worker_id}")
@@ -144,26 +137,45 @@ def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_t
             return {"error": "Simulation log file not found after worker execution."}
         df = pd.read_csv(log_file_path) 
         if df.empty: logging.error(f"Simulation log file is empty: {log_file_path}"); return {"error": "Simulation log file is empty."}
+        
+        # Ensure 'meals_input_per_step' exists, defaulting to zeros if not.
+        # This column might not be standard in all log files from OnPolicyWorker.
+        # If it's crucial, the worker should be updated to always log it.
+        # For now, we add a default if missing.
+        if 'meals_input_per_step' not in df.columns:
+            logging.warning("'meals_input_per_step' column not found in log. Defaulting to zeros for plotting.")
+            df['meals_input_per_step'] = 0.0 # Or np.nan if preferred, handle in JS
+
         column_map = {'cgm': 'cgm', 'insulin': 'ins', 'meals_input_per_step': 'meal', 'rewards': 'rew'}
         sim_results = {}
         for api_key, csv_col_name in column_map.items():
             if csv_col_name not in df.columns:
+                # For 'meal', we already handled potential absence if we expect 'meals_input_per_step'
+                if api_key == 'meal' and 'meals_input_per_step' in df.columns:
+                     sim_results[api_key] = df['meals_input_per_step'].tolist()
+                     continue # Skip error for 'meal' if 'meals_input_per_step' is used
+
                 logging.error(f"Expected column '{csv_col_name}' (for API key '{api_key}') not found in log file {log_file_path}. Available columns: {df.columns.tolist()}")
                 return {"error": f"Missing column '{csv_col_name}' in simulation log."}
             sim_results[api_key] = df[csv_col_name].tolist()
-        sim_results["total_reward"] = sum(sim_results["rewards"])
+            
+        sim_results["total_reward"] = sum(sim_results.get("rew", [])) # Use .get for safety
         sim_results["patient_name"] = worker_args.patient_name 
-        sim_results["duration_steps"] = len(sim_results["cgm"])
+        sim_results["duration_steps"] = len(sim_results.get("cgm", []))
+
     finally:
         if hasattr(base_args, 'experiment_folder') and os.path.exists(base_args.experiment_folder):
             try: shutil.rmtree(base_args.experiment_folder); logging.info(f"Cleaned up temp directory: {base_args.experiment_folder}")
             except Exception as e: logging.error(f"Error cleaning up temp directory {base_args.experiment_folder}: {e}")
     return sim_results
 
-def plot_simulation_results_to_base64(results_list, titles_list, main_title_patient_id, save_path_prefix):
+# This function will now primarily save the plot to a file.
+# The base64 string generation and return are removed as they are not sent to the client.
+def plot_simulation_results_to_file(results_list, titles_list, main_title_patient_id, save_path_prefix):
     if not results_list or not any(r and not r.get("error") for r in results_list) or len(results_list) != len(titles_list):
-        logging.warning("Plotting skipped: No valid results or mismatch in results/titles.") 
-        return None
+        logging.warning("Plotting skipped for file saving: No valid results or mismatch in results/titles.") 
+        return # No plot_url to return
+
     fig = plt.figure(figsize=(16, 8)) 
     ax2 = fig.add_subplot(111)
     divider = make_axes_locatable(ax2)
@@ -184,72 +196,106 @@ def plot_simulation_results_to_base64(results_list, titles_list, main_title_pati
     ax3_meals = ax2.twinx()
     ax3_meals.set_ylabel('CHO (g)', color='#800000', fontsize=12)
     ax3_meals.tick_params(axis='y', labelcolor='#800000', labelsize=10)
+    
     first_valid_result = next((r for r in results_list if r and not r.get("error")), None)
-    if not first_valid_result: return None
+    if not first_valid_result or not first_valid_result.get("cgm"): # Check if cgm data exists
+        logging.warning("Plotting skipped: First valid result has no CGM data.")
+        plt.close(fig)
+        return
+
     num_steps = len(first_valid_result["cgm"])
     time_in_hours = [t * SIM_SAMPLING_RATE / 60.0 for t in range(num_steps)]
     fig.suptitle(f"Simulation Results for Patient ID {main_title_patient_id}", fontsize=16, y=0.99) 
     plot_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'] 
     plotted_meals_overall = False
     max_cgm_val_overall = 0; max_ins_val_overall = 0; max_cho_val_overall = 0 
+
     for i, (results_dict, title) in enumerate(zip(results_list, titles_list)):
-        if not results_dict or results_dict.get("error"): logging.info(f"Skipping plot data for {title} due to error/missing."); continue
+        if not results_dict or results_dict.get("error"): 
+            logging.info(f"Skipping plot data for {title} due to error/missing."); 
+            continue
+        
         color = plot_colors[i % len(plot_colors)]
-        ax1.plot(time_in_hours, results_dict["cgm"], label=f"{title} CGM", color=color, linewidth=1.5)
-        if results_dict["cgm"]: max_cgm_val_overall = max(max_cgm_val_overall, max(results_dict["cgm"]))
-        plot_version_insulin = 0 
-        if plot_version_insulin == 1:
-            bar_width_hours = (SIM_SAMPLING_RATE / 60) * 0.8 
-            ax2.bar(time_in_hours, results_dict["insulin"], width=bar_width_hours, label=f"{title} Insulin", color=color, alpha=0.7)
-        else: ax2.plot(time_in_hours, results_dict["insulin"], label=f"{title} Insulin", color=color, linestyle='--', linewidth=1.5)
-        if results_dict["insulin"]: max_ins_val_overall = max(max_ins_val_overall, max(results_dict["insulin"]))
-        if not plotted_meals_overall and results_dict.get("meals_input_per_step"):
-            meal_values = results_dict["meals_input_per_step"]
-            if meal_values:
-                if any(m > 0 for m in meal_values): max_cho_val_overall = max(max_cho_val_overall, max(meal_values))
+        
+        current_cgm_data = results_dict.get("cgm", [])
+        current_insulin_data = results_dict.get("insulin", [])
+        
+        if current_cgm_data:
+            ax1.plot(time_in_hours, current_cgm_data, label=f"{title} CGM", color=color, linewidth=1.5)
+            max_cgm_val_overall = max(max_cgm_val_overall, max(current_cgm_data) if current_cgm_data else 0)
+        
+        if current_insulin_data:
+            ax2.plot(time_in_hours, current_insulin_data, label=f"{title} Insulin", color=color, linestyle='--', linewidth=1.5)
+            max_ins_val_overall = max(max_ins_val_overall, max(current_insulin_data) if current_insulin_data else 0)
+
+        # Use 'meal' key which maps to 'meals_input_per_step' or 'meal' from CSV
+        if not plotted_meals_overall and results_dict.get("meal"): 
+            meal_values = results_dict["meal"]
+            if meal_values: # Ensure meal_values is not empty
+                if any(m > 0 for m in meal_values): max_cho_val_overall = max(max_cho_val_overall, max(m for m in meal_values if m > 0))
                 meal_indices = [idx for idx, meal_val in enumerate(meal_values) if meal_val > 0]
                 if meal_indices:
                     meal_cho_at_event = [meal_values[idx] for idx in meal_indices]
                     time_of_meals_in_hours = [time_in_hours[idx] for idx in meal_indices]
+                    
+                    # Annotations (similar to original)
                     meal_annotation_toggle = True
                     current_max_cgm_for_annotation = max(max_cgm_val_overall, 300) 
-                    for meal_idx, cho in zip(meal_indices, meal_cho_at_event):
-                        time_h = time_in_hours[meal_idx]
-                        cgm_at_meal_for_annotation_base = first_valid_result["cgm"][meal_idx] 
-                        offset_y_val = (current_max_cgm_for_annotation * 0.90) if meal_annotation_toggle else (current_max_cgm_for_annotation * 0.80)
-                        offset_y_val = max(cgm_at_meal_for_annotation_base + 30, min(offset_y_val, current_max_cgm_for_annotation - 10))
-                        ax1.annotate(f'{cho:.0f}g', (time_h, offset_y_val), xytext=(0,5), textcoords='offset points', color='#800000', ha='center', fontsize=9, bbox=dict(boxstyle="round,pad=0.2", fc="yellow", alpha=0.3, ec="none"))
-                        ax1.plot([time_h, time_h], [cgm_at_meal_for_annotation_base, offset_y_val-5], color='#800000', linestyle='-', linewidth=0.8, alpha=0.7)
-                        meal_annotation_toggle = not meal_annotation_toggle
+                    cgm_for_annotation = first_valid_result.get("cgm", [])
+                    if cgm_for_annotation:
+                        for meal_idx_in_list, cho in enumerate(meal_cho_at_event):
+                            original_meal_idx = meal_indices[meal_idx_in_list]
+                            time_h = time_in_hours[original_meal_idx]
+                            
+                            cgm_at_meal_for_annotation_base = cgm_for_annotation[original_meal_idx]
+                            offset_y_val = (current_max_cgm_for_annotation * 0.90) if meal_annotation_toggle else (current_max_cgm_for_annotation * 0.80)
+                            offset_y_val = max(cgm_at_meal_for_annotation_base + 30, min(offset_y_val, current_max_cgm_for_annotation - 10))
+                            ax1.annotate(f'{cho:.0f}g', (time_h, offset_y_val), xytext=(0,5), textcoords='offset points', color='#800000', ha='center', fontsize=9, bbox=dict(boxstyle="round,pad=0.2", fc="yellow", alpha=0.3, ec="none"))
+                            ax1.plot([time_h, time_h], [cgm_at_meal_for_annotation_base, offset_y_val-5], color='#800000', linestyle='-', linewidth=0.8, alpha=0.7)
+                            meal_annotation_toggle = not meal_annotation_toggle
+
                     markerline, stemlines, baseline = ax3_meals.stem(time_of_meals_in_hours, meal_cho_at_event, linefmt='grey', markerfmt='o', basefmt=" ")
                     plt.setp(markerline, markerfacecolor='#800000', markeredgecolor='grey', markersize=5)
                     markerline.set_label("Meals CHO (g)")
                     plotted_meals_overall = True
+
     if not plotted_meals_overall: 
         dummy_meal_line = mlines.Line2D([], [], color='#800000', marker='o', linestyle='None', markersize=5, label='Meals CHO (g)')
         ax3_meals.add_line(dummy_meal_line)
+
     ax1.set_ylim(0, max(max_cgm_val_overall * 1.1, 350))
     ax2.set_ylim(0, max(max_ins_val_overall * 1.2, 1.0)) 
-    ax3_meals.set_ylim(0, max(max_cho_val_overall * 1.1, 10)) 
+    ax3_meals.set_ylim(0, max(max_cho_val_overall * 1.1, 10.0 if max_cho_val_overall == 0 else max_cho_val_overall * 1.1))
+
+
     handles, labels = [], []
-    for ax_loop in [ax1, ax2, ax3_meals]: # Renamed loop variable
+    for ax_loop in [ax1, ax2, ax3_meals]: 
         for handle, label in zip(*ax_loop.get_legend_handles_labels()):
             if label not in labels: handles.append(handle); labels.append(label)
+    
     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=max(1,len(handles)//2 + len(handles)%2), fontsize=9, frameon=False)
     if time_in_hours: ax2.set_xlim(left=min(time_in_hours)-0.1 if time_in_hours else 0, right=max(time_in_hours)+0.1 if time_in_hours else 1)
+    
     plt.tight_layout(rect=[0, 0.03, 1, 0.90]) 
-    img_bytes = io.BytesIO(); plt.savefig(img_bytes, format='png', dpi=120); img_bytes.seek(0)
-    plot_url = base64.b64encode(img_bytes.getvalue()).decode('utf8'); plt.close(fig) 
+    
     if save_path_prefix:
+        img_bytes_for_saving = io.BytesIO()
+        plt.savefig(img_bytes_for_saving, format='png', dpi=120)
+        img_bytes_for_saving.seek(0)
+        
         save_dir = os.path.dirname(save_path_prefix)
         if save_dir and not os.path.exists(save_dir): os.makedirs(save_dir, exist_ok=True)
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{save_path_prefix}_patientID_{main_title_patient_id}_{timestamp_str}.png"
         try:
-            with open(filename, "wb") as f_out: f_out.write(img_bytes.getvalue())
+            with open(filename, "wb") as f_out: f_out.write(img_bytes_for_saving.getvalue())
             logging.info(f"Plot saved to {filename} from buffer.")
         except Exception as e: logging.error(f"Failed to save plot to {filename}: {e}")
-    return plot_url
+    
+    plt.close(fig)
+    # No plot_url (base64 string) is returned for the client
+    return
+
 
 # ---- Route for the HTML page ----
 @app.route('/')
@@ -270,7 +316,7 @@ def simulate_glucose_endpoint():
             else: return jsonify({"error": "Each meal item must have 'time_minutes' and 'carbs'."}), 400
         parsed_meal_data.sort(key=lambda x: x[0])
         
-        current_app_config = app.config # Store current_app.config if needed outside request context
+        current_app_config = app.config 
         if current_app_config.get('VERBOSE_DEBUG', True): 
             app.logger.info(f"Received meal data for API: {parsed_meal_data}")
 
@@ -282,25 +328,51 @@ def simulate_glucose_endpoint():
         ppo_results = run_simulation_for_agent(ppo_model_file_template, parsed_meal_data, agent_type_suffix="ppo")
         pcpo_results = run_simulation_for_agent(pcpo_model_file_template, parsed_meal_data, agent_type_suffix="pcpo")
         
-        plot_base64 = None
+        # Server-side plot saving (optional, but no base64 sent to client)
         patient_id_for_plot_title = SIM_PATIENT_NAME_STR 
-        results_to_plot = []; titles_for_plot = []
-        if ppo_results and "error" not in ppo_results: results_to_plot.append(ppo_results); titles_for_plot.append("PPO")
-        else: app.logger.warning(f"PPO results contain error or are missing: {ppo_results}")
-        if pcpo_results and "error" not in pcpo_results: results_to_plot.append(pcpo_results); titles_for_plot.append("PCPO")
-        else: app.logger.warning(f"PCPO results contain error or are missing: {pcpo_results}")
+        results_to_plot_for_saving = []; titles_for_plot_saving = []
+        if ppo_results and "error" not in ppo_results: 
+            results_to_plot_for_saving.append(ppo_results)
+            titles_for_plot_saving.append("PPO")
+        else: 
+            app.logger.warning(f"PPO results contain error or are missing (for saving): {ppo_results}")
         
-        if results_to_plot: 
+        if pcpo_results and "error" not in pcpo_results: 
+            results_to_plot_for_saving.append(pcpo_results)
+            titles_for_plot_saving.append("PCPO")
+        else: 
+            app.logger.warning(f"PCPO results contain error or are missing (for saving): {pcpo_results}")
+        
+        if results_to_plot_for_saving: 
             plot_save_directory = "plots" 
-            save_prefix = os.path.join(plot_save_directory, "simulation_plot")
-            plot_base64 = plot_simulation_results_to_base64(results_list=results_to_plot, titles_list=titles_for_plot, main_title_patient_id=patient_id_for_plot_title, save_path_prefix=save_prefix)
-        else: app.logger.warning("No valid results to plot.")
+            # Changed prefix to distinguish from any previous naming convention
+            save_prefix = os.path.join(plot_save_directory, "sim_plot_serverside") 
+            plot_simulation_results_to_file(
+                results_list=results_to_plot_for_saving, 
+                titles_list=titles_for_plot_saving, 
+                main_title_patient_id=patient_id_for_plot_title, 
+                save_path_prefix=save_prefix
+            )
+        else: 
+            app.logger.warning("No valid results to save plot on server.")
             
-        return jsonify({"ppo_simulation": ppo_results, "pcpo_simulation": pcpo_results, "plot_image_base64": plot_base64})
+        response_data = {
+            "ppo_simulation": ppo_results,
+            "pcpo_simulation": pcpo_results,
+            "sim_sampling_rate": SIM_SAMPLING_RATE # Pass this to frontend
+        }
+            
+        return jsonify(response_data)
 
-    except FileNotFoundError as e: app.logger.error(f"A model file was not found: {e}", exc_info=True); return jsonify({"error": f"A required model file was not found: {str(e)}. Please check server configuration and model paths."}), 500
-    except ValueError as e: app.logger.error(f"ValueError during simulation setup: {e}", exc_info=True); return jsonify({"error": f"Configuration error during simulation: {str(e)}"}), 500
-    except Exception as e: app.logger.error(f"Error during simulation: {e}", exc_info=True); return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+    except FileNotFoundError as e: 
+        app.logger.error(f"A model file was not found: {e}", exc_info=True)
+        return jsonify({"error": f"A required model file was not found: {str(e)}. Please check server configuration and model paths."}), 500
+    except ValueError as e: 
+        app.logger.error(f"ValueError during simulation setup: {e}", exc_info=True)
+        return jsonify({"error": f"Configuration error during simulation: {str(e)}"}), 500
+    except Exception as e: 
+        app.logger.error(f"Error during simulation: {e}", exc_info=True)
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.config['VERBOSE_DEBUG'] = True 
@@ -319,4 +391,4 @@ if __name__ == '__main__':
     except Exception as e:
         logging.warning(f"Could not setup/load .env for MAIN_PATH: {e}. Using CWD as fallback for MAIN_PATH if needed by decouple.")
         if 'MAIN_PATH' not in os.environ: os.environ['MAIN_PATH'] = os.getcwd()
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get("PORT", 5001))) # Changed port to 5001 to avoid conflicts if any
