@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>T1D Simulation</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
+        label { display: block; margin-top: 10px; font-weight: bold; }
+        input[type="number"], input[type="text"] { 
+            width: calc(100% - 22px); 
+            padding: 10px; 
+            margin-top: 5px; 
+            border: 1px solid #ddd; 
+            border-radius: 4px; 
+            box-sizing: border-box;
+        }
+        button { 
+            background-color: #007bff; 
+            color: white; 
+            padding: 10px 15px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-size: 16px;
+            margin-top: 20px;
+        }
+        button:hover { background-color: #0056b3; }
+        .meal-entry { margin-bottom: 15px; padding: 10px; border: 1px solid #eee; border-radius: 4px; }
+        .results, .plot-container { margin-top: 20px; padding: 15px; background-color: #e9e9e9; border-radius: 4px; }
+        img#simulationPlot { max-width: 100%; height: auto; border: 1px solid #ccc; }
+        pre { background-color: #f0f0f0; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; }
+        #loadingMessage { display: none; color: #007bff; font-weight: bold; margin-top: 10px;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Type 1 Diabetes Simulation</h1>
+
+        <h2>Meal Schedule</h2>
+        <div id="mealInputs">
+            <div class="meal-entry">
+                <label for="mealTime1">Meal 1 Time (minutes from start, e.g., 480 for 8 AM):</label>
+                <input type="number" id="mealTime1" value="480">
+                <label for="mealCarbs1">Meal 1 Carbs (grams):</label>
+                <input type="number" id="mealCarbs1" value="50">
+            </div>
+            <div class="meal-entry">
+                <label for="mealTime2">Meal 2 Time (minutes from start):</label>
+                <input type="number" id="mealTime2" value="720">
+                <label for="mealCarbs2">Meal 2 Carbs (grams):</label>
+                <input type="number" id="mealCarbs2" value="70">
+            </div>
+            <div class="meal-entry">
+                <label for="mealTime3">Meal 3 Time (minutes from start):</label>
+                <input type="number" id="mealTime3" value="1080">
+                <label for="mealCarbs3">Meal 3 Carbs (grams):</label>
+                <input type="number" id="mealCarbs3" value="60">
+            </div>
+        </div>
+        <button type="button" onclick="addMealInput()">Add Another Meal</button>
+        
+        <button onclick="runSimulation()">Run Simulation</button>
+        <p id="loadingMessage">Running simulation, please wait...</p>
+
+        <h2>Simulation Plot</h2>
+        <div class="plot-container">
+            <img id="simulationPlot" src="" alt="Simulation Plot Will Appear Here">
+        </div>
+
+        <h2>Raw Results</h2>
+        <div class="results">
+            <h3>PPO Agent</h3>
+            <pre id="ppoResults">PPO results will appear here.</pre>
+        </div>
+        <div class="results">
+            <h3>PCPO Agent</h3>
+            <pre id="pcpoResults">PCPO results will appear here.</pre>
+        </div>
+    </div>
+
+    <script>
+        let mealCount = 3;
+
+        function addMealInput() {
+            mealCount++;
+            const mealInputsDiv = document.getElementById('mealInputs');
+            const newMealEntry = document.createElement('div');
+            newMealEntry.className = 'meal-entry';
+            newMealEntry.innerHTML = `
+                <label for="mealTime${mealCount}">Meal ${mealCount} Time (minutes from start):</label>
+                <input type="number" id="mealTime${mealCount}">
+                <label for="mealCarbs${mealCount}">Meal ${mealCount} Carbs (grams):</label>
+                <input type="number" id="mealCarbs${mealCount}">
+            `;
+            mealInputsDiv.appendChild(newMealEntry);
+        }
+
+        async function runSimulation() {
+            const meals = [];
+            for (let i = 1; i <= mealCount; i++) {
+                const timeInput = document.getElementById(`mealTime${i}`);
+                const carbsInput = document.getElementById(`mealCarbs${i}`);
+                if (timeInput && carbsInput && timeInput.value && carbsInput.value) {
+                    meals.push({
+                        time_minutes: parseInt(timeInput.value),
+                        carbs: parseFloat(carbsInput.value)
+                    });
+                }
+            }
+
+            if (meals.length === 0) {
+                alert("Please enter at least one meal.");
+                return;
+            }
+
+            document.getElementById('loadingMessage').style.display = 'block';
+            document.getElementById('simulationPlot').src = ""; // Clear previous plot
+            document.getElementById('ppoResults').textContent = "Loading PPO results...";
+            document.getElementById('pcpoResults').textContent = "Loading PCPO results...";
+
+
+            try {
+                const response = await fetch('/simulate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ meals: meals }),
+                });
+
+                document.getElementById('loadingMessage').style.display = 'none';
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.ppo_simulation) {
+                    document.getElementById('ppoResults').textContent = JSON.stringify(data.ppo_simulation, null, 2);
+                } else {
+                    document.getElementById('ppoResults').textContent = "No PPO data returned or error in PPO simulation.";
+                }
+
+                if (data.pcpo_simulation) {
+                    document.getElementById('pcpoResults').textContent = JSON.stringify(data.pcpo_simulation, null, 2);
+                } else {
+                     document.getElementById('pcpoResults').textContent = "No PCPO data returned or error in PCPO simulation.";
+                }
+                
+                if (data.plot_image_base64) {
+                    document.getElementById('simulationPlot').src = data.plot_image_base64;
+                } else {
+                    document.getElementById('simulationPlot').alt = "Plot could not be generated.";
+                }
+
+            } catch (error) {
+                document.getElementById('loadingMessage').style.display = 'none';
+                console.error('Error:', error);
+                alert('Error during simulation: ' + error.message);
+                document.getElementById('ppoResults').textContent = "Error: " + error.message;
+                document.getElementById('pcpoResults').textContent = "Error: " + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
