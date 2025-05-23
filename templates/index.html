@@ -2,307 +2,453 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Glucose Simulation (Real-Time Update Simulation)</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.4.0/dist/chartjs-plugin-annotation.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RL4T1D Simulation</title>
+    <!-- Include Chart.js from a CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
-        .meal-entry { border: 1px solid #eee; padding: 10px; margin-bottom: 10px; }
-        label { display: block; margin-top: 5px; margin-bottom: 2px; }
-        input[type="number"] { width: 95%; padding: 8px; margin-bottom: 8px; border: 1px solid #ccc; border-radius: 4px; }
-        button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; }
-        button:hover { background-color: #0056b3; }
-        button:disabled { background-color: #cccccc; cursor: not-allowed;}
-        #plot-container { width: 100%; max-width: 900px; height: 450px; margin-top: 20px; border: 1px solid #ddd;}
-        pre { background-color: #f8f8f8; border: 1px solid #ddd; padding: 10px; white-space: pre-wrap; word-wrap: break-word; max-height: 100px; overflow-y: auto; }
-        #status-message { margin-top: 10px; font-style: italic; color: #555; }
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; text-align: center; }
+        .controls, .meals-section, .status, .results-info { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="number"], input[type="text"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button {
+            background-color: #5cb85c; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover { background-color: #4cae4c; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #addMealButton { background-color: #007bff; }
+        #addMealButton:hover { background-color: #0056b3; }
+        .meal-entry { display: flex; align-items: center; margin-bottom: 10px; }
+        .meal-entry label { margin-right: 10px; min-width: 100px; }
+        .meal-entry input { flex-grow: 1; margin-right: 10px; }
+        .meal-entry .remove-meal { background-color: #d9534f; font-size: 12px; padding: 5px 10px; }
+        .meal-entry .remove-meal:hover { background-color: #c9302c; }
+        #statusMessage { font-style: italic; color: #555; }
+        #chartContainer { width: 95%; max-width: 1200px; margin: 20px auto; background-color: #fff; padding: 10px; border-radius: 5px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
         .error-message { color: red; font-weight: bold; }
+        .warning-message { color: orange; }
     </style>
 </head>
 <body>
-    <h1>Glucose Simulation (Simulated Real-Time)</h1>
+    <div class="container">
+        <h1>T1D Reinforcement Learning Simulation</h1>
 
-    <h2>Meal Schedule</h2>
-    <div id="meals-container">
-        <div class="meal-entry">
-            <label for="meal-time-1">Meal Time 1 (minutes from start):</label>
-            <input type="number" id="meal-time-1" class="meal-time" value="480">
-            <label for="meal-carbs-1">Carbohydrates 1 (grams):</label>
-            <input type="number" id="meal-carbs-1" class="meal-carbs" value="50">
+        <div class="meals-section">
+            <h2>Meal Configuration</h2>
+            <div id="mealsContainer">
+                <!-- Meal entries will be added here -->
+            </div>
+            <button id="addMealButton">Add Meal</button>
         </div>
-    </div>
-    <button type="button" onclick="addMealEntry()">Add Another Meal</button>
-    <hr>
-    <button type="button" id="runSimButton" onclick="initiateSimulation()">Run Simulation</button>
-    <div id="status-message">Ready.</div>
 
-    <div id="plot-container">
-        <canvas id="simulationChart"></canvas>
-    </div>
+        <div class="controls">
+            <button id="startSimButton">Start Simulation</button>
+        </div>
 
-    <div id="text-results-container" style="display:none; margin-top:20px;">
-        <h2>Full Simulation Data (after completion)</h2>
-        <h3>PPO Simulation:</h3>
-        <pre id="ppo-results-json"></pre>
-        <h3>PCPO Simulation:</h3>
-        <pre id="pcpo-results-json"></pre>
+        <div class="status">
+            <h2>Status</h2>
+            <p id="statusMessage">Waiting for simulation to start...</p>
+            <p id="patientInfo"></p>
+            <p id="progressInfo"></p>
+            <p class="error-message" id="errorMessage"></p>
+            <p class="warning-message" id="warningMessage"></p>
+        </div>
+        
+        <div id="chartContainer">
+            <canvas id="simulationChart"></canvas>
+        </div>
+
+        <div class="results-info">
+            <h2>Simulation Summary</h2>
+            <p>PPO Total Reward: <span id="ppoTotalReward">-</span></p>
+            <p>PCPO Total Reward: <span id="pcpoTotalReward">-</span></p>
+        </div>
+
     </div>
 
     <script>
-        let mealCount = 1;
+        const socket = io(); // Connect to the Socket.IO server
+
+        const startSimButton = document.getElementById('startSimButton');
+        const addMealButton = document.getElementById('addMealButton');
+        const mealsContainer = document.getElementById('mealsContainer');
+        const statusMessage = document.getElementById('statusMessage');
+        const patientInfo = document.getElementById('patientInfo');
+        const progressInfo = document.getElementById('progressInfo');
+        const errorMessage = document.getElementById('errorMessage');
+        const warningMessage = document.getElementById('warningMessage');
+        const ppoTotalRewardEl = document.getElementById('ppoTotalReward');
+        const pcpoTotalRewardEl = document.getElementById('pcpoTotalReward');
+
         let simulationChart;
-        let simIdGlobal = null;
-        let totalStepsGlobal = 0;
-        let currentStartIndexGlobal = 0;
-        let simSamplingRateGlobal = 5;
-        let patientNameGlobal = "N/A";
-        let fetchIntervalId = null;
-        const CHUNK_SIZE = 20; // Data points per chunk
+        let chartData = {
+            labels: [], // Time steps
+            datasets: [
+                {
+                    label: 'PPO CGM (mg/dL)',
+                    borderColor: 'rgb(0, 123, 255)',
+                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                    tension: 0.1,
+                    data: [],
+                    yAxisID: 'yCGM',
+                    pointRadius: 1,
+                },
+                {
+                    label: 'PCPO CGM (mg/dL)',
+                    borderColor: 'rgb(255, 193, 7)',
+                    backgroundColor: 'rgba(255, 193, 7, 0.1)',
+                    tension: 0.1,
+                    data: [],
+                    yAxisID: 'yCGM',
+                    pointRadius: 1,
+                },
+                {
+                    label: 'PPO Insulin (U)',
+                    borderColor: 'rgb(40, 167, 69)',
+                    backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                    data: [],
+                    yAxisID: 'yInsulin',
+                    stepped: true,
+                    pointRadius: 0,
+                },
+                {
+                    label: 'PCPO Insulin (U)',
+                    borderColor: 'rgb(220, 53, 69)',
+                    backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                    data: [],
+                    yAxisID: 'yInsulin',
+                    stepped: true,
+                    pointRadius: 0,
+                },
+                {
+                    label: 'Meal (g CHO)',
+                    borderColor: 'rgb(108, 117, 125)',
+                    backgroundColor: 'rgba(108, 117, 125, 0.2)',
+                    type: 'bar',
+                    data: [],
+                    yAxisID: 'yMeal',
+                }
+            ]
+        };
 
-        function addMealEntry() {
-            mealCount++;
-            const mealsContainer = document.getElementById('meals-container');
-            const newMealEntry = document.createElement('div');
-            newMealEntry.classList.add('meal-entry');
-            newMealEntry.innerHTML = `
-                <label for="meal-time-${mealCount}">Meal Time ${mealCount} (minutes from start):</label>
-                <input type="number" id="meal-time-${mealCount}" class="meal-time" placeholder="e.g., 720 for 12 PM">
-                <label for="meal-carbs-${mealCount}">Carbohydrates ${mealCount} (grams):</label>
-                <input type="number" id="meal-carbs-${mealCount}" class="meal-carbs" placeholder="e.g., 70">
-            `;
-            mealsContainer.appendChild(newMealEntry);
-        }
+        let currentSimId = null;
+        let currentTotalSteps = 0;
+        let currentNextStartIndex = 0;
+        let simSamplingRate = 5; // Default, will be updated from backend
+        const chunkSize = 50; 
+        let ppoRewards = [];
+        let pcpoRewards = [];
 
-        function initializeChart(patientName = "N/A", samplingRate = 5) {
+
+        function initializeChart() {
             const ctx = document.getElementById('simulationChart').getContext('2d');
             if (simulationChart) {
                 simulationChart.destroy();
             }
-            // Initialize datasets with specific structures for clarity
-            const datasets = [
-                { label: 'PPO CGM (mg/dL)', data: [], borderColor: '#1f77b4', yAxisID: 'yCGM', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5, borderWidth: 2 },
-                { label: 'PPO Insulin (U/step)', data: [], borderColor: 'rgba(31, 119, 180, 0.7)', borderDash: [5, 5], yAxisID: 'yInsulin', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5, borderWidth: 1.5 },
-                { label: 'PCPO CGM (mg/dL)', data: [], borderColor: '#ff7f0e', yAxisID: 'yCGM', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5, borderWidth: 2 },
-                { label: 'PCPO Insulin (U/step)', data: [], borderColor: 'rgba(255, 127, 14, 0.7)', borderDash: [5, 5], yAxisID: 'yInsulin', type: 'line', tension: 0.1, fill: false, pointRadius: 1.5, borderWidth: 1.5 },
-                { label: 'Meals CHO (g)', data: [], backgroundColor: 'rgba(128, 0, 0, 0.5)', yAxisID: 'yMeals', type: 'bar', barPercentage: 0.3, categoryPercentage: 0.5 }
-            ];
+            chartData.labels = [];
+            chartData.datasets.forEach(ds => ds.data = []);
+            ppoRewards = [];
+            pcpoRewards = [];
+            ppoTotalRewardEl.textContent = '-';
+            pcpoTotalRewardEl.textContent = '-';
 
             simulationChart = new Chart(ctx, {
-                data: { labels: [], datasets: datasets },
+                type: 'line', // Default type, can be overridden by dataset
+                data: chartData,
                 options: {
-                    responsive: true, maintainAspectRatio: false,
-                    animation: false, // No animation for faster updates
-                    interaction: { mode: 'index', intersect: false, axis: 'x' },
-                    plugins: {
-                        title: { display: true, text: `Simulation Results for Patient ID ${patientName}`, font: { size: 16 } },
-                        legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 10, padding: 20 } },
-                        annotation: {
-                            annotations: {
-                                line70: { type: 'line', yScaleID: 'yCGM', value: 70, borderColor: 'red', borderWidth: 1.5, borderDash: [5,5], label: { content: 'Hypo (<70)', enabled: true, position: "start", backgroundColor: 'rgba(255,255,255,0.5)', font:{style:'italic'}}},
-                                line180: { type: 'line', yScaleID: 'yCGM', value: 180, borderColor: 'darkorange', borderWidth: 1.5, borderDash: [5,5], label: { content: 'Hyper (>180)', enabled: true, position: "start", backgroundColor: 'rgba(255,255,255,0.5)', font:{style:'italic'}}},
-                                line250: { type: 'line', yScaleID: 'yCGM', value: 250, borderColor: 'maroon', borderWidth: 1.5, borderDash: [2,2], label: { content: 'Severe Hyper (>250)', enabled: true, position: "start", backgroundColor: 'rgba(255,255,255,0.5)', font:{style:'italic'}}},
-                                boxNormo: { type: 'box', yScaleID: 'yCGM', yMin: 70, yMax: 180, backgroundColor: 'rgba(75, 192, 75, 0.1)', borderColor: 'transparent' }
-                            }
-                        }
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    animation: {
+                        duration: 200 // Faster animation for progressive updates
                     },
                     scales: {
-                        x: { title: { display: true, text: `Time (hours) - Each step = ${samplingRate} min`, font: { weight: 'bold'} }, grid: { display: false } },
-                        yCGM: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'CGM (mg/dL)', font:{weight:'bold'}}, suggestedMin: 0, suggestedMax: 400, ticks: { color: '#000080' }},
-                        yInsulin: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'Insulin (U/step)', font:{weight:'bold'}}, grid: { drawOnChartArea: false }, suggestedMin: 0, ticks: { color: 'mediumseagreen' }},
-                        yMeals: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'CHO (g)', font:{weight:'bold'}}, grid: { drawOnChartArea: false }, offset: true, suggestedMin: 0, suggestedMax: 100, ticks: { color: '#800000' }}
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time (hours)'
+                            },
+                            ticks: {
+                                callback: function(value, index, values) {
+                                    // value is the data label (index here)
+                                    return (index * simSamplingRate / 60).toFixed(1);
+                                }
+                            }
+                        },
+                        yCGM: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'CGM (mg/dL)'
+                            },
+                            suggestedMin: 40,
+                            suggestedMax: 300,
+                            grid: {
+                                drawOnChartArea: false, // only BGL grid lines
+                              }
+                        },
+                        yInsulin: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Insulin (U)'
+                            },
+                            suggestedMin: 0,
+                            suggestedMax: 3,
+                            grid: {
+                                drawOnChartArea: false, 
+                              }
+                        },
+                        yMeal: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Meal (g CHO)'
+                            },
+                            suggestedMin: 0,
+                            suggestedMax: 100,
+                            grid: {
+                                drawOnChartArea: false, 
+                            },
+                            offset: true // For bar chart
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                        },
+                        annotation: { // For horizontal lines (normoglycemia, hypo, hyper)
+                            annotations: {
+                                normoLow: { type: 'line', yMin: 70, yMax: 70, borderColor: 'green', borderWidth: 1, borderDash: [6, 6], label: { content: '70', enabled: true, position: 'start'}},
+                                normoHigh: { type: 'line', yMin: 180, yMax: 180, borderColor: 'orange', borderWidth: 1, borderDash: [6, 6], label: { content: '180', enabled: true, position: 'start'}},
+                                hyperSevere: { type: 'line', yMin: 250, yMax: 250, borderColor: 'red', borderWidth: 1, borderDash: [3, 3], label: { content: '250', enabled: true, position: 'start'}}
+                            }
+                        }
                     }
                 }
             });
         }
         
-        async function initiateSimulation() {
-            document.getElementById('runSimButton').disabled = true;
-            document.getElementById('status-message').textContent = 'Initiating simulation... (Backend is running the full simulation now)';
-            document.getElementById('status-message').classList.remove('error-message');
-            document.getElementById('text-results-container').style.display = 'none';
+        function addMealEntry() {
+            const mealId = Date.now(); // Unique ID for removal
+            const mealDiv = document.createElement('div');
+            mealDiv.classList.add('meal-entry');
+            mealDiv.id = `meal-${mealId}`;
+            mealDiv.innerHTML = `
+                <label for="mealTime-${mealId}">Time (minutes from start):</label>
+                <input type="number" id="mealTime-${mealId}" name="mealTime" min="0" step="1" value="0">
+                <label for="mealCarbs-${mealId}">Carbs (g):</label>
+                <input type="number" id="mealCarbs-${mealId}" name="mealCarbs" min="0" step="1" value="0">
+                <button class="remove-meal" data-mealid="${mealId}">Remove</button>
+            `;
+            mealsContainer.appendChild(mealDiv);
 
-            const mealEntries = document.querySelectorAll('.meal-entry');
-            const meal_details_input = [];
+            mealDiv.querySelector('.remove-meal').addEventListener('click', function() {
+                document.getElementById(`meal-${this.dataset.mealid}`).remove();
+            });
+        }
+
+        function collectMealData() {
+            const meals = [];
+            const mealEntries = mealsContainer.querySelectorAll('.meal-entry');
             mealEntries.forEach(entry => {
-                const timeInput = entry.querySelector('.meal-time');
-                const carbsInput = entry.querySelector('.meal-carbs');
-                if (timeInput.value && carbsInput.value) {
-                     if (parseInt(timeInput.value) < 0 || parseFloat(carbsInput.value) < 0) {
-                        alert("Meal time and carbs cannot be negative.");
-                        document.getElementById('runSimButton').disabled = false;
-                        document.getElementById('status-message').textContent = 'Error: Invalid meal input.';
-                        document.getElementById('status-message').classList.add('error-message');
-                        return; // Stop if input is invalid
-                    }
-                    meal_details_input.push({
-                        time_minutes: parseInt(timeInput.value),
+                const timeInput = entry.querySelector('input[name="mealTime"]');
+                const carbsInput = entry.querySelector('input[name="mealCarbs"]');
+                if (timeInput && carbsInput && timeInput.value !== "" && carbsInput.value !== "") {
+                    meals.push({
+                        time_minutes: parseInt(timeInput.value, 10),
                         carbs: parseFloat(carbsInput.value)
                     });
                 }
             });
-
-            currentStartIndexGlobal = 0;
-            initializeChart("N/A", 5); // Initialize with defaults
-
-            try {
-                const response = await fetch('/start_simulation', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ meals: meal_details_input })
-                });
-                const data = await response.json();
-
-                if (!response.ok || data.error) {
-                    throw new Error(data.error || `HTTP error! status: ${response.status}`);
-                }
-
-                simIdGlobal = data.simulation_id;
-                totalStepsGlobal = data.total_steps;
-                simSamplingRateGlobal = data.sim_sampling_rate;
-                patientNameGlobal = data.patient_name;
-                
-                initializeChart(patientNameGlobal, simSamplingRateGlobal); // Re-initialize with correct info
-
-                let statusText = `Simulation ${simIdGlobal} started. Fetching data...`;
-                if (data.warning) {
-                    statusText += ` Warning: ${data.warning}`;
-                    document.getElementById('status-message').classList.add('error-message');
-                }
-                document.getElementById('status-message').textContent = statusText;
-
-                if (fetchIntervalId) clearInterval(fetchIntervalId);
-                fetchIntervalId = setInterval(fetchSimulationChunk, 500); // Fetch chunks faster for smoother "animation"
-
-            } catch (error) {
-                console.error('Error initiating simulation:', error);
-                document.getElementById('status-message').textContent = 'Error: ' + error.message;
-                document.getElementById('status-message').classList.add('error-message');
-                document.getElementById('runSimButton').disabled = false;
-            }
+            return meals;
         }
 
-        async function fetchSimulationChunk() {
-            if (!simIdGlobal || (currentStartIndexGlobal >= totalStepsGlobal && totalStepsGlobal > 0) ) {
-                document.getElementById('status-message').textContent = 'Simulation complete. All data fetched.';
-                document.getElementById('status-message').classList.remove('error-message');
-                document.getElementById('runSimButton').disabled = false;
-                if (fetchIntervalId) clearInterval(fetchIntervalId);
-                fetchIntervalId = null; 
-                // displayFullResultsAfterCompletion(); // Call to show JSON if needed
+        function startSimulationViaSocket() {
+            const meals = collectMealData();
+            if (meals.length === 0) {
+                // Add a default no-meal scenario if desired, or prompt user
+                // For now, we allow no meals explicitly by the user.
+            }
+            console.log("Emitting 'start_simulation_via_socket' with meals:", meals);
+            
+            statusMessage.textContent = "Requesting simulation start...";
+            errorMessage.textContent = "";
+            warningMessage.textContent = "";
+            patientInfo.textContent = "";
+            progressInfo.textContent = "";
+            startSimButton.disabled = true;
+            initializeChart();
+
+            socket.emit('start_simulation_via_socket', { meals: meals });
+        }
+        
+        socket.on('simulation_starting', (data) => {
+            console.log('Backend: Simulation is starting:', data);
+            statusMessage.textContent = `Simulation (ID: ${data.simulation_id}) is starting...`;
+        });
+
+        socket.on('simulation_ready_for_chunks', (data) => {
+            console.log('Backend: Simulation complete, ready for chunk fetching:', data);
+            statusMessage.textContent = `Simulation (ID: ${data.simulation_id}) ready. Fetching data...`;
+            
+            if (data.error) {
+                errorMessage.textContent = `Simulation setup error: ${data.error}`;
+                startSimButton.disabled = false;
+                return;
+            }
+            if (data.warning) {
+                warningMessage.textContent = data.warning;
+            }
+
+            currentSimId = data.simulation_id;
+            currentTotalSteps = data.total_steps;
+            simSamplingRate = data.sim_sampling_rate || 5;
+            currentNextStartIndex = 0;
+            
+            patientInfo.textContent = `Patient: ${data.patient_name}, Total Steps: ${currentTotalSteps}`;
+            
+            fetchNextChunk();
+        });
+
+        socket.on('simulation_error', (data) => {
+            console.error('Backend: Simulation error (socket):', data.error);
+            statusMessage.textContent = "Error during simulation.";
+            errorMessage.textContent = data.error;
+            startSimButton.disabled = false;
+        });
+
+        socket.on('connect_error', (err) => {
+            console.error("Socket connection error:", err);
+            statusMessage.textContent = "Failed to connect to server.";
+            errorMessage.textContent = "Connection error. Please ensure the server is running and reachable.";
+        });
+         socket.on('connect', () => {
+            console.log("Socket connected successfully with SID:", socket.id);
+            statusMessage.textContent = "Connected to server. Ready to start simulation.";
+            errorMessage.textContent = ""; // Clear previous errors on successful connect
+        });
+
+        socket.on('disconnect', (reason) => {
+            console.log("Socket disconnected:", reason);
+            if (reason === "io server disconnect") {
+                // the disconnection was initiated by the server, you need to reconnect manually
+                socket.connect();
+            }
+            // else the socket will automatically try to reconnect
+            // statusMessage.textContent = "Disconnected. Trying to reconnect...";
+        });
+
+
+        async function fetchChunkHTTP(simulationId, startIndex, size) {
+            const response = await fetch(`/get_simulation_chunk?simulation_id=${simulationId}&start_index=${startIndex}&chunk_size=${size}`);
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: `HTTP error! status: ${response.status}` }));
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        }
+
+        async function fetchNextChunk() {
+            if (!currentSimId || (currentTotalSteps > 0 && currentNextStartIndex >= currentTotalSteps)) {
+                console.log("All data fetched or no active simulation.");
+                statusMessage.textContent = "All simulation data loaded.";
+                progressInfo.textContent = `Loaded ${currentNextStartIndex-chunkSize+ (chartData.labels.length % chunkSize)} / ${currentTotalSteps} steps.`;
+                startSimButton.disabled = false;
                 return;
             }
 
             try {
-                const response = await fetch(`/get_simulation_chunk?simulation_id=${simIdGlobal}&start_index=${currentStartIndexGlobal}&chunk_size=${CHUNK_SIZE}`);
-                const chunkData = await response.json();
+                statusMessage.textContent = `Fetching data chunk... (Step ${currentNextStartIndex} / ${currentTotalSteps})`;
+                const chunkData = await fetchChunkHTTP(currentSimId, currentNextStartIndex, chunkSize);
+                
+                console.log("Received chunk:", chunkData);
 
-                if (!response.ok || chunkData.error) {
-                    throw new Error(chunkData.error || `HTTP error! status: ${response.status}`);
+                let newLabels = 0;
+                if (chunkData.ppo_chunk && chunkData.ppo_chunk.cgm && chunkData.ppo_chunk.cgm.length > 0) {
+                    newLabels = chunkData.ppo_chunk.cgm.length;
+                    chartData.datasets[0].data.push(...chunkData.ppo_chunk.cgm);
+                    chartData.datasets[2].data.push(...(chunkData.ppo_chunk.insulin || []));
+                     ppoRewards.push(...(chunkData.ppo_chunk.rewards || []));
+                } else if (chunkData.ppo_chunk && chunkData.ppo_chunk.error_message) {
+                    console.warn("PPO chunk error:", chunkData.ppo_chunk.error_message);
+                     errorMessage.textContent = (errorMessage.textContent ? errorMessage.textContent + "\n" : "") + "PPO Error: " + chunkData.ppo_chunk.error_message;
+                }
+
+                if (chunkData.pcpo_chunk && chunkData.pcpo_chunk.cgm && chunkData.pcpo_chunk.cgm.length > 0) {
+                    if (newLabels === 0) newLabels = chunkData.pcpo_chunk.cgm.length; // If PPO had no data
+                    chartData.datasets[1].data.push(...chunkData.pcpo_chunk.cgm);
+                    chartData.datasets[3].data.push(...(chunkData.pcpo_chunk.insulin || []));
+                    pcpoRewards.push(...(chunkData.pcpo_chunk.rewards || []));
+                } else if (chunkData.pcpo_chunk && chunkData.pcpo_chunk.error_message) {
+                     console.warn("PCPO chunk error:", chunkData.pcpo_chunk.error_message);
+                     errorMessage.textContent = (errorMessage.textContent ? errorMessage.textContent + "\n" : "") + "PCPO Error: " + chunkData.pcpo_chunk.error_message;
                 }
                 
-                totalStepsGlobal = chunkData.actual_total_steps; // Update total steps from server
-                updateChartWithChunk(chunkData.ppo_chunk, chunkData.pcpo_chunk);
-                currentStartIndexGlobal = chunkData.next_start_index;
-                
-                const progress = totalStepsGlobal > 0 ? Math.min(100, (currentStartIndexGlobal / totalStepsGlobal) * 100).toFixed(0) : 0;
-                document.getElementById('status-message').textContent = `Fetching data... ${progress}% complete.`;
+                // Common meal data (assuming it's the same for both or use one as primary)
+                const mealSource = (chunkData.ppo_chunk && chunkData.ppo_chunk.meal) ? chunkData.ppo_chunk : chunkData.pcpo_chunk;
+                if (mealSource && mealSource.meal && mealSource.meal.length > 0){
+                     chartData.datasets[4].data.push(...mealSource.meal);
+                } else if (newLabels > 0 && mealSource && mealSource.meal) { // meal array might exist but be empty
+                    chartData.datasets[4].data.push(...Array(newLabels).fill(0));
+                }
 
-                if (chunkData.is_final_chunk) {
-                    document.getElementById('status-message').textContent = 'Simulation complete. Final chunk received.';
-                     document.getElementById('status-message').classList.remove('error-message');
-                    document.getElementById('runSimButton').disabled = false;
-                    if (fetchIntervalId) clearInterval(fetchIntervalId);
-                    fetchIntervalId = null;
-                    // displayFullResultsAfterCompletion(); // Call to show JSON if needed
+
+                for (let i = 0; i < newLabels; i++) {
+                    chartData.labels.push(chartData.labels.length);
+                }
+
+                simulationChart.update();
+                
+                const loadedSteps = chartData.labels.length;
+                progressInfo.textContent = `Loaded ${loadedSteps} / ${currentTotalSteps} steps.`;
+                
+                // Update total rewards
+                ppoTotalRewardEl.textContent = ppoRewards.reduce((a, b) => a + b, 0).toFixed(2);
+                pcpoTotalRewardEl.textContent = pcpoRewards.reduce((a, b) => a + b, 0).toFixed(2);
+
+
+                currentNextStartIndex = chunkData.next_start_index;
+
+                if (chunkData.is_final_chunk || loadedSteps >= chunkData.actual_total_steps ) {
+                    statusMessage.textContent = "Simulation data fully loaded.";
+                     progressInfo.textContent = `Loaded ${loadedSteps} / ${chunkData.actual_total_steps} steps.`;
+                    startSimButton.disabled = false;
+                } else {
+                    setTimeout(fetchNextChunk, 50); // Faster for smoother loading
                 }
             } catch (error) {
-                console.error('Error fetching chunk:', error);
-                document.getElementById('status-message').textContent = 'Error fetching data: ' + error.message;
-                document.getElementById('status-message').classList.add('error-message');
-                document.getElementById('runSimButton').disabled = false;
-                if (fetchIntervalId) clearInterval(fetchIntervalId);
-                fetchIntervalId = null;
+                console.error("Error fetching/processing chunk:", error);
+                statusMessage.textContent = "Error loading simulation data.";
+                errorMessage.textContent = error.message;
+                startSimButton.disabled = false;
             }
         }
 
-        function updateChartWithChunk(ppoChunk, pcpoChunk) {
-            if (!simulationChart) return;
+        // Event Listeners
+        addMealButton.addEventListener('click', addMealEntry);
+        startSimButton.addEventListener('click', startSimulationViaSocket);
 
-            let chunkLength = 0;
-            if (ppoChunk && ppoChunk.cgm && ppoChunk.cgm.length > 0) {
-                chunkLength = ppoChunk.cgm.length;
-            } else if (pcpoChunk && pcpoChunk.cgm && pcpoChunk.cgm.length > 0) {
-                chunkLength = pcpoChunk.cgm.length;
-            }
-
-            if (chunkLength === 0) return; // No new data in this chunk
-
-            const newTimeLabels = [];
-            for (let i = 0; i < chunkLength; i++) {
-                const stepIndex = currentStartIndexGlobal + i;
-                 // Generate time label only if we are within total steps
-                if (stepIndex < totalStepsGlobal) {
-                    newTimeLabels.push(((stepIndex * simSamplingRateGlobal) / 60).toFixed(2));
-                }
-            }
-            simulationChart.data.labels.push(...newTimeLabels);
-
-            // PPO Data
-            if (ppoChunk) {
-                simulationChart.data.datasets[0].data.push(...(ppoChunk.cgm || []));
-                simulationChart.data.datasets[1].data.push(...(ppoChunk.insulin || []));
-                // Meals - typically common, take from PPO if available
-                if (ppoChunk.meal) {
-                    simulationChart.data.datasets[4].data.push(...ppoChunk.meal.map(m => m > 0 ? m : NaN));
-                } else if (chunkLength > 0) { // if no meal data, push NaNs to keep alignment
-                    simulationChart.data.datasets[4].data.push(...Array(chunkLength).fill(NaN));
-                }
-                 if(ppoChunk.error_message) console.warn("PPO chunk error: " + ppoChunk.error_message);
-            }
-
-
-            // PCPO Data
-            if (pcpoChunk) {
-                simulationChart.data.datasets[2].data.push(...(pcpoChunk.cgm || []));
-                simulationChart.data.datasets[3].data.push(...(pcpoChunk.insulin || []));
-                // If PPO didn't provide meal data but PCPO did, and meal dataset is still short
-                if (!(ppoChunk && ppoChunk.meal) && pcpoChunk.meal && simulationChart.data.datasets[4].data.length < simulationChart.data.labels.length) {
-                     simulationChart.data.datasets[4].data.push(...pcpoChunk.meal.map(m => m > 0 ? m : NaN));
-                } else if (!(ppoChunk && ppoChunk.meal) && !(pcpoChunk && pcpoChunk.meal) && chunkLength > 0 && simulationChart.data.datasets[4].data.length < simulationChart.data.labels.length) {
-                    // If neither provided meal data for this chunk, push NaNs
-                    simulationChart.data.datasets[4].data.push(...Array(chunkLength).fill(NaN));
-                }
-                if(pcpoChunk.error_message) console.warn("PCPO chunk error: " + pcpoChunk.error_message);
-            }
-            
-            // Ensure all datasets are padded to the length of the labels array
-            const targetLength = simulationChart.data.labels.length;
-            simulationChart.data.datasets.forEach(dataset => {
-                while(dataset.data.length < targetLength) {
-                    dataset.data.push(NaN);
-                }
-            });
-            
-            // Dynamically adjust yMeals axis max
-            const allMealData = simulationChart.data.datasets[4].data.filter(val => !isNaN(val) && val > 0);
-            const maxMealVal = allMealData.length > 0 ? Math.max(...allMealData) : 0;
-            simulationChart.options.scales.yMeals.suggestedMax = maxMealVal > 0 ? Math.ceil(maxMealVal * 1.2 / 5) * 5 : 50;
-
-
-            simulationChart.update();
-        }
-        
-        // Placeholder - you might populate this if you cache full results on frontend
-        function displayFullResultsAfterCompletion() {
-            // Example: If you had cached full_ppo_results and full_pcpo_results earlier
-            // document.getElementById('text-results-container').style.display = 'block';
-            // document.getElementById('ppo-results-json').textContent = JSON.stringify(full_ppo_results, null, 2);
-            // document.getElementById('pcpo-results-json').textContent = JSON.stringify(full_pcpo_results, null, 2);
-        }
-
+        // Initial setup
         window.onload = () => {
-            initializeChart(SIM_PATIENT_NAME_STR, SIM_SAMPLING_RATE);
+            initializeChart();
+            addMealEntry(); // Add one meal entry by default
         };
+
     </script>
 </body>
 </html>

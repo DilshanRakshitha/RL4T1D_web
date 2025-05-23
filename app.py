@@ -4,11 +4,12 @@ import numpy as np
 import pandas as pd
 import torch
 from flask import Flask, request, jsonify, render_template
+from flask_socketio import SocketIO, emit # Import emit
 from argparse import Namespace
 from datetime import datetime
 import logging
 import shutil
-import uuid # For unique simulation IDs
+import uuid 
 
 import matplotlib
 matplotlib.use('Agg')
@@ -21,6 +22,8 @@ from agents.models.actor_critic import ActorCritic
 from utils.worker import OnPolicyWorker
 
 app = Flask(__name__, template_folder='templates')
+app.config['SECRET_KEY'] = 'your_very_secret_key_for_socketio!' # Ensure this is set
+socketio = SocketIO(app, cors_allowed_origins="*") # Allow all origins for now during dev
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(filename)s:%(lineno)d %(message)s')
 
@@ -31,31 +34,36 @@ SIM_PATIENT_NAME_STR = '0'
 SIM_DURATION_MINUTES = 24 * 60
 SIM_SAMPLING_RATE = 5
 
-# --- Global Cache for Simulation Data ---
 simulation_cache = {}
-# ---
 
 if not os.path.exists(MODEL_DIR):
     os.makedirs(MODEL_DIR)
 
-# --- (get_simulation_args, configure_custom_scenario_args, run_simulation_for_agent, plot_simulation_results_to_file
-#      are largely the same as in the previous correct version, with minor adjustments for unique run IDs if needed) ---
-
 def get_simulation_args(run_identifier_prefix="sim_run"):
     args = Namespace()
-    # Use a consistent base for experiment_folder that might be shared if not careful
-    # but worker_log_path_base should be unique per full simulation
     unique_log_id = f"{run_identifier_prefix}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-    args.experiment_folder = os.path.join("temp_web_sim_output", unique_log_id) # Made unique
+    args.experiment_folder = os.path.join("temp_web_sim_output", unique_log_id) 
     args.experiment_dir = args.experiment_folder
     args.worker_log_path_base = os.path.join(args.experiment_dir, "testing", "data")
     os.makedirs(args.worker_log_path_base, exist_ok=True, mode=0o755)
 
     args.device = "cpu"
-    args.verbose = app.config.get('VERBOSE_DEBUG', False) # Less verbose for this
+    args.verbose = app.config.get('VERBOSE_DEBUG', False) 
     args.seed = random.randint(0, 100000)
-    from environment.utils import get_patient_env
+    
+    project_root_for_env_util = os.path.dirname(os.path.abspath(__file__))
+    main_path_val_util = os.environ.get('MAIN_PATH', project_root_for_env_util)
+    current_main_path_env_var = os.environ.get('MAIN_PATH')
+    if not current_main_path_env_var:
+            os.environ['MAIN_PATH'] = main_path_val_util 
+
+    from environment.utils import get_patient_env # This might use MAIN_PATH
     patients_from_util_with_hash, _ = get_patient_env()
+
+    if not current_main_path_env_var: 
+        if 'MAIN_PATH' in os.environ and os.environ['MAIN_PATH'] == main_path_val_util:
+            del os.environ['MAIN_PATH']
+
     try:
         args.patient_id = int(SIM_PATIENT_NAME_STR)
         if not (0 <= args.patient_id < len(patients_from_util_with_hash)):
@@ -78,7 +86,7 @@ def get_simulation_args(run_identifier_prefix="sim_run"):
     args.n_step = SIM_DURATION_MINUTES // SIM_SAMPLING_RATE
     args.max_epi_length = args.n_step; args.max_test_epi_len = args.n_step
     args.debug = False; args.pi_lr = 3e-4; args.vf_lr = 3e-4
-    num_meal_slots = 6 # Max 6 meals
+    num_meal_slots = 6 
     args.meal_times_mean = [8.0, 10.5, 13.0, 16.5, 20.0, 22.5][:num_meal_slots]
     args.time_variance = [1e-8] * num_meal_slots; args.time_lower_bound = list(args.meal_times_mean)
     args.time_upper_bound = list(args.meal_times_mean); args.meal_prob = [-1.0] * num_meal_slots
@@ -96,41 +104,34 @@ def configure_custom_scenario_args(base_args, scenario_meal_data):
             custom_meal_times_hours.append(float(meal_time_min) / 60.0)
             custom_meal_amounts_grams.append(float(meal_carbs))
     
-    num_meal_slots = len(worker_args.meal_times_mean) # Use the length from default args
+    num_meal_slots = len(worker_args.meal_times_mean)
     
-    # Initialize with defaults, then overwrite
     new_meal_times_mean = list(worker_args.meal_times_mean)
-    new_val_meal_amount = [0.0] * num_meal_slots # Default to 0 amount
-    new_val_meal_prob = [-1.0] * num_meal_slots   # Default to no meal (prob -1)
+    new_val_meal_amount = [0.0] * num_meal_slots 
+    new_val_meal_prob = [-1.0] * num_meal_slots   
 
     for i in range(len(custom_meal_times_hours)):
-        if i < num_meal_slots: # Ensure we don't go out of bounds for the scenario config
+        if i < num_meal_slots: 
             new_meal_times_mean[i] = custom_meal_times_hours[i]
             new_val_meal_amount[i] = custom_meal_amounts_grams[i]
-            new_val_meal_prob[i] = 1.0 # Meal occurs
+            new_val_meal_prob[i] = 1.0 
         else:
-            # This case implies more meals provided than slots in base config,
-            # which shouldn't happen if num_meal_slots is fixed (e.g., 6).
-            # If it can, then the base config needs to be large enough or dynamic.
             logging.warning(f"Meal entry {i+1} exceeds available scenario meal slots ({num_meal_slots}). Ignoring.")
-
 
     worker_args.meal_times_mean = new_meal_times_mean
     worker_args.val_meal_amount = new_val_meal_amount
     worker_args.val_meal_prob = new_val_meal_prob
     
-    # Ensure these are lists of the correct length (num_meal_slots)
     worker_args.val_time_variance = [1e-8] * num_meal_slots
     worker_args.val_meal_variance = [1e-8] * num_meal_slots
-    worker_args.time_lower_bound = list(new_meal_times_mean) # Match mean for fixed times
-    worker_args.time_upper_bound = list(new_meal_times_mean) # Match mean for fixed times
+    worker_args.time_lower_bound = list(new_meal_times_mean) 
+    worker_args.time_upper_bound = list(new_meal_times_mean) 
     
-    worker_args.env_type = 'testing'
+    worker_args.env_type = 'testing' 
     return worker_args
 
 def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_type_suffix, sim_id_for_logging):
     actual_model_filename = model_filename_template.format(SIM_PATIENT_NAME_STR)
-    # Use sim_id_for_logging to make folder unique for this full simulation run's logs
     base_args = get_simulation_args(run_identifier_prefix=f"{sim_id_for_logging}_{agent_type_suffix}")
     worker_args = configure_custom_scenario_args(base_args, meal_data_for_sim)
 
@@ -139,17 +140,27 @@ def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_t
 
     if not os.path.exists(actor_path): return {"error": f"Actor model not found: {actor_path}"}
     if not os.path.exists(critic_path): return {"error": f"Critic model not found: {critic_path}"}
-
-    policy_net = ActorCritic(args=worker_args, load=True, actor_path=actor_path, critic_path=critic_path)
-    policy_net.to(worker_args.device); policy_net.eval()
-
-    api_worker_id = abs(hash(sim_id_for_logging + agent_type_suffix)) % 10000 + 8000 # Consistent worker ID for this sim_id part
     
-    sim_results = {"error": "Simulation did not complete fully or log file issue."} # Default error
+    sim_results = {"error": "Simulation did not complete fully or log file issue."} 
     try:
+        project_root_for_worker = os.path.dirname(os.path.abspath(__file__))
+        main_path_val_worker = os.environ.get('MAIN_PATH', project_root_for_worker)
+        current_main_path_env_var_worker = os.environ.get('MAIN_PATH')
+        if not current_main_path_env_var_worker:
+                os.environ['MAIN_PATH'] = main_path_val_worker
+
+        policy_net = ActorCritic(args=worker_args, load=True, actor_path=actor_path, critic_path=critic_path)
+        policy_net.to(worker_args.device); policy_net.eval()
+        
+        api_worker_id = abs(hash(sim_id_for_logging + agent_type_suffix)) % 10000 + 8000 
+        
         logging.info(f"Running {agent_type_suffix} for sim ID {sim_id_for_logging}, worker_id {api_worker_id}, log path base: {worker_args.worker_log_path_base}")
         worker = OnPolicyWorker(args=worker_args, env_args=worker_args, mode='testing', worker_id=api_worker_id)
-        worker.rollout(policy=policy_net, buffer=None)
+        worker.rollout(policy=policy_net, buffer=None) 
+
+        if not current_main_path_env_var_worker: 
+            if 'MAIN_PATH' in os.environ and os.environ['MAIN_PATH'] == main_path_val_worker:
+                del os.environ['MAIN_PATH']
         
         log_file_path = os.path.join(worker_args.worker_log_path_base, f"logs_worker_{api_worker_id}.csv")
         logging.info(f"Log file should be at: {log_file_path}")
@@ -167,7 +178,6 @@ def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_t
                     logging.warning(f"'meals_input_per_step' not in {log_file_path}, defaulting to 0.")
                     df['meals_input_per_step'] = 0.0
 
-                # Check for essential columns
                 essential_cols = {'cgm': 'cgm', 'insulin': 'ins', 'rewards': 'rew'}
                 for api_key, csv_col_name in essential_cols.items():
                     if csv_col_name not in df.columns:
@@ -177,7 +187,7 @@ def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_t
                 sim_results = {
                     'cgm': df['cgm'].tolist(),
                     'insulin': df['ins'].tolist(),
-                    'meal': df['meals_input_per_step'].tolist(), # Use the (potentially defaulted) column
+                    'meal': df['meals_input_per_step'].tolist(),
                     'rewards': df['rew'].tolist()
                 }
                 sim_results["total_reward"] = sum(sim_results.get("rewards", []))
@@ -187,8 +197,7 @@ def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_t
         logging.error(f"Exception during {agent_type_suffix} simulation for {sim_id_for_logging}: {e}", exc_info=True)
         sim_results = {"error": f"Exception during simulation: {str(e)}"}
     finally:
-        # Cleanup the unique folder for this simulation run
-        folder_to_cleanup = getattr(base_args, 'experiment_folder', None) # experiment_folder is unique due to unique_log_id
+        folder_to_cleanup = getattr(base_args, 'experiment_folder', None) 
         if folder_to_cleanup and os.path.exists(folder_to_cleanup):
             try:
                 shutil.rmtree(folder_to_cleanup)
@@ -198,8 +207,6 @@ def run_simulation_for_agent(model_filename_template, meal_data_for_sim, agent_t
     return sim_results
 
 def plot_simulation_results_to_file(results_list, titles_list, main_title_patient_id, save_path_prefix):
-    # (This function remains the same as your last provided correct version for server-side saving)
-    # It's good practice to ensure it handles cases where results_list might contain error dicts.
     valid_results_for_plot = []
     valid_titles_for_plot = []
     for res, title in zip(results_list, titles_list):
@@ -211,7 +218,6 @@ def plot_simulation_results_to_file(results_list, titles_list, main_title_patien
         logging.warning("Plotting to file skipped: No valid results with CGM data.")
         return
 
-    # ... (rest of your existing plotting logic using valid_results_for_plot and valid_titles_for_plot) ...
     fig = plt.figure(figsize=(16, 8))
     ax2 = fig.add_subplot(111)
     divider = make_axes_locatable(ax2)
@@ -233,7 +239,7 @@ def plot_simulation_results_to_file(results_list, titles_list, main_title_patien
     ax3_meals.set_ylabel('CHO (g)', color='#800000', fontsize=12)
     ax3_meals.tick_params(axis='y', labelcolor='#800000', labelsize=10)
 
-    first_valid_result = valid_results_for_plot[0] # Already checked it exists
+    first_valid_result = valid_results_for_plot[0] 
     num_steps = len(first_valid_result["cgm"])
     time_in_hours = [t * SIM_SAMPLING_RATE / 60.0 for t in range(num_steps)]
     fig.suptitle(f"Simulation Results for Patient ID {main_title_patient_id}", fontsize=16, y=0.99)
@@ -242,7 +248,6 @@ def plot_simulation_results_to_file(results_list, titles_list, main_title_patien
     max_cgm_val_overall = 0; max_ins_val_overall = 0; max_cho_val_overall = 0
 
     for i, (results_dict, title) in enumerate(zip(valid_results_for_plot, valid_titles_for_plot)):
-        # Already know results_dict is valid and has "cgm"
         color = plot_colors[i % len(plot_colors)]
         ax1.plot(time_in_hours, results_dict["cgm"], label=f"{title} CGM", color=color, linewidth=1.5)
         if results_dict["cgm"]: max_cgm_val_overall = max(max_cgm_val_overall, max(results_dict["cgm"]))
@@ -261,10 +266,9 @@ def plot_simulation_results_to_file(results_list, titles_list, main_title_patien
                     meal_cho_at_event = [meal_values[idx] for idx in meal_indices]
                     time_of_meals_in_hours = [time_in_hours[idx] for idx in meal_indices]
                     
-                    # Annotations
                     meal_annotation_toggle = True
                     current_max_cgm_for_annotation = max(max_cgm_val_overall, 300)
-                    cgm_for_annotation = first_valid_result.get("cgm", []) # Use CGM from first valid for positioning
+                    cgm_for_annotation = first_valid_result.get("cgm", []) 
                     if cgm_for_annotation:
                         for meal_idx_in_list, cho in enumerate(meal_cho_at_event):
                             original_meal_idx = meal_indices[meal_idx_in_list]
@@ -311,11 +315,12 @@ def plot_simulation_results_to_file(results_list, titles_list, main_title_patien
         except Exception as e: logging.error(f"Failed to save plot to {filename}: {e}")
     plt.close(fig)
 
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
+# This HTTP endpoint for starting simulation is now mostly for fallback or direct API testing.
+# The primary way to start sims for the UI will be via the Socket.IO event.
 @app.route('/start_simulation', methods=['POST'])
 def start_simulation_endpoint():
     try:
@@ -323,70 +328,44 @@ def start_simulation_endpoint():
         if not data or 'meals' not in data:
             return jsonify({"error": "Missing 'meals' data."}), 400
         
+        # ... (same meal parsing and validation as before) ...
         meal_details_input = data.get('meals', [])
         parsed_meal_data = []
         for meal_item in meal_details_input:
-            # Basic validation for meal_item structure
             if not isinstance(meal_item, dict) or "time_minutes" not in meal_item or "carbs" not in meal_item:
                 return jsonify({"error": "Meal items must be objects with 'time_minutes' and 'carbs'."}), 400
             try:
                 time_min = int(meal_item["time_minutes"])
                 carbs = float(meal_item["carbs"])
                 if time_min < 0 or carbs < 0:
-                     return jsonify({"error": "Meal time and carbs cannot be negative."}), 400
+                    return jsonify({"error": "Meal time and carbs cannot be negative."}), 400
                 parsed_meal_data.append((time_min, carbs))
             except ValueError:
                 return jsonify({"error": "Invalid number format for meal time or carbs."}), 400
         parsed_meal_data.sort(key=lambda x: x[0])
 
         sim_id = str(uuid.uuid4())
-        app.logger.info(f"Starting simulation with ID: {sim_id} for meals: {parsed_meal_data}")
+        app.logger.info(f"HTTP /start_simulation called with ID: {sim_id} for meals: {parsed_meal_data}")
 
-        # Run simulations and store in cache
+        # This part is identical to what the Socket.IO handler will do
         ppo_results = run_simulation_for_agent(PPO_MODEL_FILENAME_BASE, parsed_meal_data, "ppo", sim_id)
         pcpo_results = run_simulation_for_agent(PCPO_MODEL_FILENAME_BASE, parsed_meal_data, "pcpo", sim_id)
-        
         simulation_cache[sim_id] = {"ppo_simulation": ppo_results, "pcpo_simulation": pcpo_results}
         
-        total_steps = 0
-        patient_name_from_sim = SIM_PATIENT_NAME_STR # Default
+        total_steps_ppo = len(ppo_results.get("cgm", [])) if ppo_results and "error" not in ppo_results else 0
+        total_steps_pcpo = len(pcpo_results.get("cgm", [])) if pcpo_results and "error" not in pcpo_results else 0
+        total_steps = max(total_steps_ppo, total_steps_pcpo, SIM_DURATION_MINUTES // SIM_SAMPLING_RATE)
+        
+        patient_name_from_sim = SIM_PATIENT_NAME_STR
+        if ppo_results and "patient_name" in ppo_results: patient_name_from_sim = ppo_results["patient_name"]
+        elif pcpo_results and "patient_name" in pcpo_results: patient_name_from_sim = pcpo_results["patient_name"]
+
         warning_message = None
-
-        # Determine total_steps and patient_name from successful simulations
-        if ppo_results and "error" not in ppo_results and ppo_results.get("duration_steps"):
-            total_steps = ppo_results["duration_steps"]
-            patient_name_from_sim = ppo_results.get("patient_name", patient_name_from_sim)
-        elif pcpo_results and "error" not in pcpo_results and pcpo_results.get("duration_steps"):
-            total_steps = pcpo_results["duration_steps"]
-            patient_name_from_sim = pcpo_results.get("patient_name", patient_name_from_sim)
-        else: # Fallback if both fail or lack duration_steps
-            total_steps = SIM_DURATION_MINUTES // SIM_SAMPLING_RATE
-            logging.warning(f"Could not determine total_steps from simulation for {sim_id}, using default.")
-        
-        if (ppo_results and "error" in ppo_results) or \
-           (pcpo_results and "error" in pcpo_results):
+        if (ppo_results and "error" in ppo_results) or (pcpo_results and "error" in pcpo_results):
             warning_message = "One or both simulations encountered an error. Results may be incomplete."
-            if ppo_results and "error" in ppo_results: app.logger.error(f"PPO Sim Error (ID: {sim_id}): {ppo_results['error']}")
-            if pcpo_results and "error" in pcpo_results: app.logger.error(f"PCPO Sim Error (ID: {sim_id}): {pcpo_results['error']}")
+            # ... (logging errors) ...
 
-
-        # Save combined plot to file (optional, for server-side records)
-        results_to_plot_for_saving = []
-        titles_for_plot_saving = []
-        if ppo_results and "error" not in ppo_results:
-            results_to_plot_for_saving.append(ppo_results)
-            titles_for_plot_saving.append("PPO")
-        if pcpo_results and "error" not in pcpo_results:
-            results_to_plot_for_saving.append(pcpo_results)
-            titles_for_plot_saving.append("PCPO")
-        
-        if results_to_plot_for_saving:
-            plot_save_directory = "plots" # Ensure this directory exists or is created
-            if not os.path.exists(plot_save_directory):
-                os.makedirs(plot_save_directory)
-            save_prefix = os.path.join(plot_save_directory, f"sim_plot_combined_{sim_id}")
-            plot_simulation_results_to_file(results_to_plot_for_saving, titles_for_plot_saving, patient_name_from_sim, save_prefix)
-
+        # ... (plotting to file) ...
 
         response_payload = {
             "simulation_id": sim_id,
@@ -394,20 +373,16 @@ def start_simulation_endpoint():
             "sim_sampling_rate": SIM_SAMPLING_RATE,
             "patient_name": patient_name_from_sim
         }
-        if warning_message:
-            response_payload["warning"] = warning_message
-            
+        if warning_message: response_payload["warning"] = warning_message
         return jsonify(response_payload)
 
     except Exception as e:
-        app.logger.error(f"Error in /start_simulation: {e}", exc_info=True)
-        # Ensure sim_id is not in cache if we failed before putting anything in
-        sim_id_ref = locals().get('sim_id', None)
-        if sim_id_ref and sim_id_ref in simulation_cache:
-            del simulation_cache[sim_id_ref]
-        return jsonify({"error": f"Unexpected server error during simulation setup: {str(e)}"}), 500
+        app.logger.error(f"Error in HTTP /start_simulation: {e}", exc_info=True)
+        # ... (error handling) ...
+        return jsonify({"error": f"Unexpected server error: {str(e)}"}), 500
 
 
+# This endpoint is still used by the hybrid Socket.IO approach for data retrieval
 @app.route('/get_simulation_chunk', methods=['GET'])
 def get_simulation_chunk_endpoint():
     sim_id = request.args.get('simulation_id')
@@ -421,55 +396,178 @@ def get_simulation_chunk_endpoint():
     ppo_full = full_sim_data.get("ppo_simulation", {})
     pcpo_full = full_sim_data.get("pcpo_simulation", {})
     
-    # Helper to create a chunk for an agent
-    def create_chunk(agent_full_data):
-        chunk = {"cgm": [], "insulin": [], "meal": []} # Ensure keys exist
-        if agent_full_data and "error" not in agent_full_data and agent_full_data.get("cgm"):
-            chunk["cgm"] = agent_full_data["cgm"][start_index : start_index + chunk_size]
-            chunk["insulin"] = agent_full_data.get("insulin", [])[start_index : start_index + chunk_size]
-            chunk["meal"] = agent_full_data.get("meal", [])[start_index : start_index + chunk_size]
+    def create_chunk(agent_full_data, start, size):
+        chunk = {"cgm": [], "insulin": [], "meal": []} 
+        if agent_full_data and "error" not in agent_full_data:
+            cgm_data = agent_full_data.get("cgm", [])
+            insulin_data = agent_full_data.get("insulin", [])
+            meal_data = agent_full_data.get("meal", [])
+            chunk["cgm"] = cgm_data[start : start + size]
+            chunk["insulin"] = insulin_data[start : start + size]
+            chunk["meal"] = meal_data[start : start + size]
         elif agent_full_data and "error" in agent_full_data:
             chunk["error_message"] = agent_full_data["error"]
         return chunk
 
-    ppo_chunk = create_chunk(ppo_full)
-    pcpo_chunk = create_chunk(pcpo_full)
+    ppo_chunk = create_chunk(ppo_full, start_index, chunk_size)
+    pcpo_chunk = create_chunk(pcpo_full, start_index, chunk_size)
 
-    # Determine total_steps based on available valid data
     total_steps_ppo = len(ppo_full.get("cgm", [])) if ppo_full and "error" not in ppo_full else 0
     total_steps_pcpo = len(pcpo_full.get("cgm", [])) if pcpo_full and "error" not in pcpo_full else 0
-    effective_total_steps = max(total_steps_ppo, total_steps_pcpo, SIM_DURATION_MINUTES // SIM_SAMPLING_RATE) # Fallback
+    
+    effective_total_steps = max(total_steps_ppo, total_steps_pcpo)
+    if effective_total_steps == 0: 
+        effective_total_steps = SIM_DURATION_MINUTES // SIM_SAMPLING_RATE
 
     is_final_chunk = (start_index + chunk_size) >= effective_total_steps
     
-    # Optional: Clean up cache earlier if no longer needed by any client.
-    # For simplicity, we might let them expire or clean up manually if memory is an issue.
-    # if is_final_chunk and sim_id in simulation_cache:
-    #     del simulation_cache[sim_id] 
-    #     app.logger.info(f"Removed simulation {sim_id} from cache after final chunk.")
-
     return jsonify({
         "ppo_chunk": ppo_chunk,
         "pcpo_chunk": pcpo_chunk,
         "is_final_chunk": is_final_chunk,
         "next_start_index": start_index + chunk_size,
-        "actual_total_steps": effective_total_steps # Send this to help client know true end
+        "actual_total_steps": effective_total_steps 
     })
+
+# --- Socket.IO event handlers ---
+@socketio.on('connect')
+def handle_connect():
+    app.logger.info(f"Client connected: {request.sid}")
+    # You could emit a welcome message or status here if needed
+    # emit('connection_ack', {'message': 'Connected to simulation server!'}, room=request.sid)
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    app.logger.info(f"Client disconnected: {request.sid}")
+    # Clean up any session-specific data if necessary
+    # For example, if a simulation was running for this sid and needs to be stopped
+    # (though for long simulations, this is tricky without background tasks)
+
+
+@socketio.on('start_simulation_via_socket')
+def handle_start_simulation_socket(data):
+    client_sid = request.sid
+    app.logger.info(f"Socket event 'start_simulation_via_socket' received from {client_sid} with data: {data}")
+    
+    try:
+        if not data or 'meals' not in data:
+            emit('simulation_error', {"error": "Missing 'meals' data via socket."}, room=client_sid)
+            return
+        
+        meal_details_input = data.get('meals', [])
+        parsed_meal_data = []
+        # Basic validation for meal_item structure
+        for meal_item in meal_details_input:
+            if not isinstance(meal_item, dict) or "time_minutes" not in meal_item or "carbs" not in meal_item:
+                emit('simulation_error', {"error": "Meal items must be objects with 'time_minutes' and 'carbs'."}, room=client_sid)
+                return
+            try:
+                time_min = int(meal_item["time_minutes"])
+                carbs = float(meal_item["carbs"])
+                if time_min < 0 or carbs < 0:
+                    emit('simulation_error', {"error": "Meal time and carbs cannot be negative."}, room=client_sid)
+                    return
+                parsed_meal_data.append((time_min, carbs))
+            except ValueError:
+                emit('simulation_error', {"error": "Invalid number format for meal time or carbs."}, room=client_sid)
+                return
+        parsed_meal_data.sort(key=lambda x: x[0])
+
+        sim_id = str(uuid.uuid4())
+        app.logger.info(f"Starting simulation (triggered by socket {client_sid}) with ID: {sim_id} for meals: {parsed_meal_data}")
+        emit('simulation_starting', {"simulation_id": sim_id, "message": "Simulations are now running..."}, room=client_sid)
+
+        # Run simulations (these are blocking calls for now)
+        ppo_results = run_simulation_for_agent(PPO_MODEL_FILENAME_BASE, parsed_meal_data, "ppo", sim_id)
+        pcpo_results = run_simulation_for_agent(PCPO_MODEL_FILENAME_BASE, parsed_meal_data, "pcpo", sim_id)
+        
+        simulation_cache[sim_id] = {"ppo_simulation": ppo_results, "pcpo_simulation": pcpo_results}
+        
+        # Determine total_steps and patient_name from successful simulations
+        total_steps_ppo = len(ppo_results.get("cgm", [])) if ppo_results and "error" not in ppo_results else 0
+        total_steps_pcpo = len(pcpo_results.get("cgm", [])) if pcpo_results and "error" not in pcpo_results else 0
+        total_steps = max(total_steps_ppo, total_steps_pcpo)
+        if total_steps == 0: total_steps = SIM_DURATION_MINUTES // SIM_SAMPLING_RATE
+
+        patient_name_from_sim = SIM_PATIENT_NAME_STR # Default
+        if ppo_results and "patient_name" in ppo_results and "error" not in ppo_results:
+            patient_name_from_sim = ppo_results["patient_name"]
+        elif pcpo_results and "patient_name" in pcpo_results and "error" not in pcpo_results:
+            patient_name_from_sim = pcpo_results["patient_name"]
+        
+        warning_message = None
+        if (ppo_results and "error" in ppo_results) or \
+           (pcpo_results and "error" in pcpo_results):
+            warning_message = "One or both simulations encountered an error. Results may be incomplete."
+            if ppo_results and "error" in ppo_results: app.logger.error(f"PPO Sim Error (ID: {sim_id}, SID: {client_sid}): {ppo_results['error']}")
+            if pcpo_results and "error" in pcpo_results: app.logger.error(f"PCPO Sim Error (ID: {sim_id}, SID: {client_sid}): {pcpo_results['error']}")
+        
+        # Save combined plot to file (optional, for server-side records)
+        results_to_plot_for_saving = []
+        titles_for_plot_saving = []
+        if ppo_results and "error" not in ppo_results:
+            results_to_plot_for_saving.append(ppo_results)
+            titles_for_plot_saving.append("PPO")
+        if pcpo_results and "error" not in pcpo_results:
+            results_to_plot_for_saving.append(pcpo_results)
+            titles_for_plot_saving.append("PCPO")
+        
+        if results_to_plot_for_saving:
+            plot_save_directory = "plots" 
+            if not os.path.exists(plot_save_directory):
+                os.makedirs(plot_save_directory, exist_ok=True)
+            save_prefix = os.path.join(plot_save_directory, f"sim_plot_socket_{sim_id}")
+            plot_simulation_results_to_file(results_to_plot_for_saving, titles_for_plot_saving, patient_name_from_sim, save_prefix)
+
+        # After simulations are complete, notify the client that data is ready for chunked fetching
+        response_payload_for_socket = {
+            "simulation_id": sim_id,
+            "total_steps": total_steps,
+            "sim_sampling_rate": SIM_SAMPLING_RATE,
+            "patient_name": patient_name_from_sim,
+            "message": "Simulations complete. You can now fetch data chunks."
+        }
+        if warning_message:
+            response_payload_for_socket["warning"] = warning_message
+        
+        emit('simulation_ready_for_chunks', response_payload_for_socket, room=client_sid)
+        app.logger.info(f"Emitted 'simulation_ready_for_chunks' to {client_sid} for sim_id {sim_id}")
+
+    except Exception as e:
+        app.logger.error(f"Error in 'start_simulation_via_socket' handler for SID {client_sid}: {e}", exc_info=True)
+        emit('simulation_error', {"error": f"Unexpected server error during simulation setup: {str(e)}"}, room=client_sid)
+        sim_id_ref = locals().get('sim_id', None) # Check if sim_id was defined before error
+        if sim_id_ref and sim_id_ref in simulation_cache:
+            del simulation_cache[sim_id_ref]
 
 
 if __name__ == '__main__':
-    app.config['VERBOSE_DEBUG'] = True
-    import decouple
-    try:
-        project_root_for_env = os.path.dirname(os.path.abspath(__file__))
-        env_file = os.path.join(project_root_for_env, '.env')
-        if not os.path.exists(env_file):
-            with open(env_file, 'w') as f: f.write(f"MAIN_PATH={project_root_for_env}\n")
-        decouple.RepositoryEnv(env_file)
-        main_path_from_env = decouple.config('MAIN_PATH', default=project_root_for_env)
-        os.environ['MAIN_PATH'] = main_path_from_env
-    except Exception as e:
-        logging.warning(f"Decouple .env setup failed: {e}. MAIN_PATH might not be set from .env.")
-        if 'MAIN_PATH' not in os.environ: os.environ['MAIN_PATH'] = os.getcwd()
+    app.config['VERBOSE_DEBUG'] = True 
+    
+    project_root_for_env = os.path.dirname(os.path.abspath(__file__))
+    env_file_path = os.path.join(project_root_for_env, '.env')
 
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get("PORT", 5001)))
+    if not os.path.exists(env_file_path):
+        with open(env_file_path, 'w') as f:
+            f.write(f"MAIN_PATH={project_root_for_env}\n")
+        logging.info(f"Created .env file at {env_file_path} with MAIN_PATH={project_root_for_env}")
+    
+    from decouple import config as decouple_config, UndefinedValueError as DecoupleUndefinedValueError
+    
+    try:
+        main_path_val = decouple_config('MAIN_PATH') 
+        if 'MAIN_PATH' not in os.environ or os.environ['MAIN_PATH'] != main_path_val:
+            os.environ['MAIN_PATH'] = main_path_val
+            logging.info(f"Set/updated os.environ['MAIN_PATH'] from decouple.config to: {main_path_val}")
+    except DecoupleUndefinedValueError: 
+        logging.warning(f"MAIN_PATH not found by decouple.config(). Setting os.environ['MAIN_PATH'] to default: {project_root_for_env}")
+        if 'MAIN_PATH' not in os.environ: 
+            os.environ['MAIN_PATH'] = project_root_for_env
+    except Exception as e:
+        logging.error(f"Unexpected error during MAIN_PATH setup using decouple: {e}")
+        if 'MAIN_PATH' not in os.environ: 
+            os.environ['MAIN_PATH'] = project_root_for_env
+            logging.info(f"Set os.environ['MAIN_PATH'] to default due to error: {project_root_for_env}")
+
+    socketio.run(app, debug=True, host='0.0.0.0', port=int(os.environ.get("PORT", 5001)))
