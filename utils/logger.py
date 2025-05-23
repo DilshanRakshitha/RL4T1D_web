@@ -4,8 +4,8 @@ import sys
 import shutil
 import pandas as pd
 import numpy as np
-from decouple import config
-MAIN_PATH = config('MAIN_PATH')
+# from decouple import config
+MAIN_PATH = './'
 sys.path.insert(1, MAIN_PATH)
 
 import logging
