@@ -3,310 +3,321 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RL4T1D Continuous Simulation</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <title>RL Simulation Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://code.highcharts.com/highcharts.js"></script>
+    <script src="https://code.highcharts.com/modules/accessibility.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
-        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        h1, h2 { color: #333; text-align: center; }
-        .controls, .meals-section, .status, .results-info { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="number"], input[type="text"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
-        button {
-            background-color: #5cb85c; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;
-            margin-right: 10px;
-        }
-        button:hover { background-color: #4cae4c; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        #addMealButton { background-color: #007bff; }
-        #addMealButton:hover { background-color: #0056b3; }
-        #finishSimButton { background-color: #d9534f; }
-        #finishSimButton:hover { background-color: #c9302c; }
-
-        .meal-entry { display: flex; align-items: center; margin-bottom: 10px; }
-        .meal-entry label { margin-right: 10px; min-width: 100px; }
-        .meal-entry input { flex-grow: 1; margin-right: 10px; }
-        .meal-entry .remove-meal { background-color: #d9534f; font-size: 12px; padding: 5px 10px; }
-        .meal-entry .remove-meal:hover { background-color: #c9302c; }
-        #statusMessage { font-style: italic; color: #555; }
-        #chartContainer { width: 95%; max-width: 1200px; margin: 20px auto; background-color: #fff; padding: 10px; border-radius: 5px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
-        .error-message { color: red; font-weight: bold; }
-        .warning-message { color: orange; }
+        body { font-family: sans-serif; margin: 20px; }
+        .controls, .status, .charts { margin-bottom: 20px; }
+        .chart-container { border: 1px solid #ccc; margin-bottom: 15px; min-width: 310px; height: 400px;}
+        .meal-entry { margin-bottom: 5px; }
+        .meal-entry input { margin-right: 5px; width: 80px; }
+        button { padding: 8px 15px; margin-right: 10px; cursor: pointer; }
+        #status { padding: 10px; border: 1px solid #eee; background-color: #f9f9f9; }
+        .error { color: red; font-weight: bold; }
+        .metadata { font-size: 0.9em; color: #555; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>T1D Reinforcement Learning - Continuous Simulation</h1>
+    <h1>Reinforcement Learning Simulation</h1>
 
-        <div class="meals-section">
-            <h2>Meal Configuration (for each simulation segment)</h2>
-            <div id="mealsContainer">
-                <!-- Meal entries will be added here -->
+    <div class="controls">
+        <h2>Meal Schedule</h2>
+        <div id="meal-schedule">
+            <div class="meal-entry">
+                Meal 1: Time (min from start): <input type="number" class="meal-time" value="480"> Carbs (g): <input type="number" class="meal-carbs" value="50">
             </div>
-            <button id="addMealButton">Add Meal</button>
         </div>
+        <button id="add-meal-btn">Add Another Meal</button>
+        <hr>
+        <button id="start-sim-btn">Start Continuous Simulation</button>
+        <button id="stop-sim-btn" disabled>Stop Continuous Simulation</button>
+    </div>
 
-        <div class="controls">
-            <button id="startSimButton">Start Continuous Simulation</button>
-            <button id="finishSimButton" disabled>Finish Simulation</button>
-        </div>
+    <div class="status">
+        <h2>Status</h2>
+        <div id="status-message">Not connected.</div>
+        <div id="patient-metadata" class="metadata"></div>
+    </div>
 
-        <div class="status">
-            <h2>Status</h2>
-            <p id="statusMessage">Waiting for simulation to start...</p>
-            <p id="patientInfo"></p>
-            <p id="progressInfo"></p>
-            <p class="error-message" id="errorMessage"></p>
-            <p class="warning-message" id="warningMessage"></p>
-        </div>
-        
-        <div id="chartContainer">
-            <canvas id="simulationChart"></canvas>
-        </div>
-         <div class="results-info">
-            <h2>Live Rewards (Cumulative per Agent)</h2>
-            <p>PPO Total Reward: <span id="ppoTotalReward">0.00</span></p>
-            <p>PCPO Total Reward: <span id="pcpoTotalReward">0.00</span></p>
-        </div>
+    <div class="charts">
+        <h2>Simulation Data</h2>
+        <div id="cgm-chart-container" class="chart-container"></div>
+        <div id="insulin-chart-container" class="chart-container"></div>
+        <div id="reward-chart-container" class="chart-container"></div>
     </div>
 
     <script>
-        const socket = io(); 
+        document.addEventListener('DOMContentLoaded', function () {
+            const socket = io(); // Connect to the server
 
-        const startSimButton = document.getElementById('startSimButton');
-        const finishSimButton = document.getElementById('finishSimButton');
-        const addMealButton = document.getElementById('addMealButton');
-        const mealsContainer = document.getElementById('mealsContainer');
-        const statusMessage = document.getElementById('statusMessage');
-        const patientInfo = document.getElementById('patientInfo');
-        const progressInfo = document.getElementById('progressInfo');
-        const errorMessage = document.getElementById('errorMessage');
-        const warningMessage = document.getElementById('warningMessage');
-        const ppoTotalRewardEl = document.getElementById('ppoTotalReward');
-        const pcpoTotalRewardEl = document.getElementById('pcpoTotalReward');
+            const startSimBtn = document.getElementById('start-sim-btn');
+            const stopSimBtn = document.getElementById('stop-sim-btn');
+            const addMealBtn = document.getElementById('add-meal-btn');
+            const mealScheduleDiv = document.getElementById('meal-schedule');
+            const statusMessageDiv = document.getElementById('status-message');
+            const patientMetadataDiv = document.getElementById('patient-metadata');
 
-        let simulationChart;
-        let chartData = {
-            labels: [], // Global step numbers
-            datasets: [
-                { label: 'PPO CGM (mg/dL)', borderColor: 'rgb(0, 123, 255)', tension: 0.1, data: [], yAxisID: 'yCGM', pointRadius: 1, fill: false },
-                { label: 'PCPO CGM (mg/dL)', borderColor: 'rgb(255, 193, 7)', tension: 0.1, data: [], yAxisID: 'yCGM', pointRadius: 1, fill: false },
-                { label: 'PPO Insulin (U)', borderColor: 'rgb(40, 167, 69)', data: [], yAxisID: 'yInsulin', stepped: true, pointRadius: 0, fill: false },
-                { label: 'PCPO Insulin (U)', borderColor: 'rgb(220, 53, 69)', data: [], yAxisID: 'yInsulin', stepped: true, pointRadius: 0, fill: false },
-                { label: 'Meal (g CHO)', borderColor: 'rgb(108, 117, 125)', backgroundColor: 'rgba(108, 117, 125, 0.3)', type: 'bar', data: [], yAxisID: 'yMeal' }
-            ]
-        };
-        let simSamplingRate = 5;
-        let currentPatientName = "Unknown";
-        let ppoCumulativeReward = 0;
-        let pcpoCumulativeReward = 0;
-        let maxChartPoints = 288 * 3; // Show approx 3 days of data, adjust as needed
+            let cgmChart, insulinChart, rewardChart;
+            
+            // Constants from your app.py (or pass via metadata)
+            const SIM_DURATION_MINUTES_PER_SEGMENT = 24 * 60; // This is per segment
+            let samplingRate = 5; // Default, will be updated by metadata from server
+            let maxPointsPerDay; // Will be calculated once samplingRate is known
 
-        function initializeChart() {
-            const ctx = document.getElementById('simulationChart').getContext('2d');
-            if (simulationChart) {
-                simulationChart.destroy();
+            let currentMinStep = 0; // To keep track of the x-axis window
+
+            function calculateMaxPoints() {
+                maxPointsPerDay = SIM_DURATION_MINUTES_PER_SEGMENT / samplingRate;
             }
-            chartData.labels = [];
-            chartData.datasets.forEach(ds => ds.data = []);
-            ppoCumulativeReward = 0;
-            pcpoCumulativeReward = 0;
-            updateRewardDisplay();
+            calculateMaxPoints(); // Initial calculation with default sampling rate
 
-            simulationChart = new Chart(ctx, {
-                type: 'line',
-                data: chartData,
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    animation: false, // Disable for faster live updates if needed, or keep minimal
-                    scales: {
-                        x: {
-                            title: { display: true, text: 'Time (hours)' },
-                            ticks: {
-                                callback: function(value, index, values) {
-                                    // 'value' is the actual label (global step number)
-                                    return (chartData.labels[index] * simSamplingRate / 60).toFixed(1);
-                                }
-                            }
-                        },
-                        yCGM: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'CGM (mg/dL)' }, suggestedMin: 40, suggestedMax: 350 },
-                        yInsulin: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'Insulin (U)' }, suggestedMin: 0, grid: { drawOnChartArea: false } },
-                        yMeal: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'Meal (g CHO)' }, suggestedMin: 0, grid: { drawOnChartArea: false }, offset: true }
+            function updateStatus(message, isError = false) {
+                statusMessageDiv.textContent = message;
+                statusMessageDiv.className = isError ? 'error' : '';
+            }
+
+            function initCharts() {
+                const commonChartOptions = {
+                    chart: { 
+                        zoomType: 'x',
+                        animation: Highcharts.svg, // Enable animations
+                        marginRight: 10,
+                     },
+                    title: { text: null },
+                    xAxis: {
+                        type: 'linear',
+                        title: { text: 'Simulation Step' },
+                        // tickPixelInterval: 150 // Adjust for better label spacing
                     },
-                    plugins: { legend: { position: 'top' }, tooltip: { mode: 'index', intersect: false } }
-                }
-            });
-        }
-        
-        function addMealEntry() { /* ... (same as before) ... */ 
-            const mealId = Date.now();
-            const mealDiv = document.createElement('div');
-            mealDiv.classList.add('meal-entry');
-            mealDiv.id = `meal-${mealId}`;
-            mealDiv.innerHTML = `
-                <label for="mealTime-${mealId}">Time (minutes into segment):</label>
-                <input type="number" id="mealTime-${mealId}" name="mealTime" min="0" step="1" value="0">
-                <label for="mealCarbs-${mealId}">Carbs (g):</label>
-                <input type="number" id="mealCarbs-${mealId}" name="mealCarbs" min="0" step="1" value="0">
-                <button class="remove-meal" data-mealid="${mealId}">X</button>
-            `;
-            mealsContainer.appendChild(mealDiv);
-            mealDiv.querySelector('.remove-meal').addEventListener('click', function() {
-                document.getElementById(`meal-${this.dataset.mealid}`).remove();
-            });
-        }
+                    credits: { enabled: false },
+                    legend: { enabled: true },
+                    plotOptions: {
+                        line: { marker: { enabled: false } },
+                        column: { pointPadding: 0, borderWidth: 0, groupPadding: 0.1}
+                    },
+                    // Optional: To disable series animation on initial load, but keep for updates
+                    // series: {
+                    //     animation: false 
+                    // }
+                };
 
+                cgmChart = Highcharts.chart('cgm-chart-container', Highcharts.merge(commonChartOptions, {
+                    title: { text: 'CGM Levels & Meals' },
+                    yAxis: [
+                        { // Primary yAxis for CGM
+                            title: { text: 'CGM (mg/dL)' },
+                            min: 0, max: 400, 
+                             plotLines: [{
+                                value: 70, color: 'red', dashStyle: 'shortdash', width: 1, label: { text: 'Hypo (70)'}
+                            }, {
+                                value: 180, color: 'orange', dashStyle: 'shortdash', width: 1, label: { text: 'Hyper (180)'}
+                            }]
+                        },
+                        { // Secondary yAxis for Meals
+                            title: { text: 'Meal (carbs g)' },
+                            opposite: true,
+                            min: 0
+                        }
+                    ],
+                    series: [
+                        { name: 'PPO CGM', type: 'line', yAxis: 0, data: [] },
+                        { name: 'PCPO CGM', type: 'line', yAxis: 0, data: [] },
+                        { name: 'Meal (Carbs)', type: 'column', yAxis: 1, data: [], tooltip: { valueSuffix: ' g' } }
+                    ]
+                }));
 
-        function collectMealData() { /* ... (same as before) ... */
-            const meals = [];
-            const mealEntries = mealsContainer.querySelectorAll('.meal-entry');
-            mealEntries.forEach(entry => {
-                const timeInput = entry.querySelector('input[name="mealTime"]');
-                const carbsInput = entry.querySelector('input[name="mealCarbs"]');
-                if (timeInput && carbsInput && timeInput.value !== "" && carbsInput.value !== "") {
-                    meals.push({
-                        time_minutes: parseInt(timeInput.value, 10),
-                        carbs: parseFloat(carbsInput.value)
-                    });
-                }
-            });
-            return meals;
-        }
+                insulinChart = Highcharts.chart('insulin-chart-container', Highcharts.merge(commonChartOptions, {
+                    title: { text: 'Insulin Delivery' },
+                    yAxis: { title: { text: 'Insulin (U)' }, min: 0 },
+                    series: [
+                        { name: 'PPO Insulin', type: 'line', data: [] },
+                        { name: 'PCPO Insulin', type: 'line', data: [] }
+                    ]
+                }));
 
-        function startContinuousSimulation() {
-            const meals = collectMealData();
-            console.log("Emitting 'start_continuous_simulation' with meals:", meals);
+                rewardChart = Highcharts.chart('reward-chart-container', Highcharts.merge(commonChartOptions, {
+                    title: { text: 'Rewards' },
+                    yAxis: { title: { text: 'Reward' } },
+                    series: [
+                        { name: 'PPO Reward', type: 'line', data: [] },
+                        { name: 'PCPO Reward', type: 'line', data: [] }
+                    ]
+                }));
+            }
             
-            statusMessage.textContent = "Requesting continuous simulation start...";
-            errorMessage.textContent = "";
-            warningMessage.textContent = "";
-            patientInfo.textContent = "";
-            progressInfo.textContent = "";
-            startSimButton.disabled = true;
-            finishSimButton.disabled = false;
-            initializeChart(); // Reset chart for new run
+            function resetCharts() {
+                currentMinStep = 0; // Reset x-axis window tracking
+                if (cgmChart) {
+                    cgmChart.series.forEach(s => s.setData([], false));
+                    cgmChart.xAxis[0].setExtremes(null, null, false); // Reset x-axis extremes
+                    cgmChart.redraw();
+                }
+                if (insulinChart) {
+                    insulinChart.series.forEach(s => s.setData([], false));
+                    insulinChart.xAxis[0].setExtremes(null, null, false);
+                    insulinChart.redraw();
+                }
+                if (rewardChart) {
+                    rewardChart.series.forEach(s => s.setData([], false));
+                    rewardChart.xAxis[0].setExtremes(null, null, false);
+                    rewardChart.redraw();
+                }
+            }
 
-            socket.emit('start_continuous_simulation', { meals: meals });
-        }
+            initCharts();
 
-        function finishContinuousSimulation() {
-            console.log("Emitting 'stop_continuous_simulation'");
-            socket.emit('stop_continuous_simulation');
-            statusMessage.textContent = "Stop signal sent. Waiting for simulation to finalize...";
-            finishSimButton.disabled = true; // Prevent multiple clicks
-        }
+            addMealBtn.addEventListener('click', function () {
+                const mealCount = mealScheduleDiv.children.length + 1;
+                const newMealEntry = document.createElement('div');
+                newMealEntry.className = 'meal-entry';
+                newMealEntry.innerHTML = `
+                    Meal ${mealCount}: Time (min from start): <input type="number" class="meal-time"> Carbs (g): <input type="number" class="meal-carbs">
+                `;
+                mealScheduleDiv.appendChild(newMealEntry);
+            });
 
-        function updateRewardDisplay() {
-            ppoTotalRewardEl.textContent = ppoCumulativeReward.toFixed(2);
-            pcpoTotalRewardEl.textContent = pcpoCumulativeReward.toFixed(2);
-        }
-        
-        // Socket Handlers
-        socket.on('connect', () => {
-            console.log("Socket connected: ", socket.id);
-            statusMessage.textContent = "Connected. Ready to start.";
-            startSimButton.disabled = false;
-            finishSimButton.disabled = true;
-        });
+            startSimBtn.addEventListener('click', function () {
+                const mealEntries = mealScheduleDiv.getElementsByClassName('meal-entry');
+                const meals = [];
+                for (let entry of mealEntries) {
+                    const timeInput = entry.querySelector('.meal-time');
+                    const carbsInput = entry.querySelector('.meal-carbs');
+                    const time = parseInt(timeInput.value, 10);
+                    const carbs = parseFloat(carbsInput.value);
 
-        socket.on('connection_ack', (data) => console.log(data.message));
-
-        socket.on('simulation_starting_continuous', (data) => {
-            console.log('Backend: Continuous simulation starting:', data);
-            statusMessage.textContent = data.message;
-        });
-        
-        socket.on('simulation_metadata', (data) => {
-            console.log('Backend: Received simulation metadata:', data);
-            currentPatientName = data.patient_name;
-            simSamplingRate = data.sampling_rate;
-            patientInfo.textContent = `Patient: ${currentPatientName}, Sampling: ${simSamplingRate} min/step. Running...`;
-        });
-
-        socket.on('simulation_data_point', (data) => {
-            // console.log('Data point:', data);
-            const currentGlobalStep = data.step;
-
-            // Add X label (global step) if it's new
-            if (!chartData.labels.includes(currentGlobalStep)) {
-                 chartData.labels.push(currentGlobalStep);
-                 // Ensure all datasets have a placeholder for this new step if data for it hasn't arrived yet
-                 chartData.datasets.forEach(ds => {
-                    if (ds.data.length < chartData.labels.length) {
-                        ds.data.push(null); // or NaN, or handle appropriately
+                    if (!isNaN(time) && !isNaN(carbs) && time >= 0 && carbs >= 0) {
+                        meals.push({ time_minutes: time, carbs: carbs });
+                    } else if (timeInput.value || carbsInput.value) { 
+                        alert('Please enter valid, non-negative numbers for all meal times and carbs, or leave them blank to ignore.');
+                        return;
                     }
-                 });
-            }
-            const labelIndex = chartData.labels.indexOf(currentGlobalStep);
-
-
-            if (data.agent === 'ppo') {
-                chartData.datasets[0].data[labelIndex] = data.cgm;
-                chartData.datasets[2].data[labelIndex] = data.insulin;
-                ppoCumulativeReward += data.reward;
-                // PPO is source of truth for meal for this step
-                chartData.datasets[4].data[labelIndex] = data.meal; 
-            } else if (data.agent === 'pcpo') {
-                chartData.datasets[1].data[labelIndex] = data.cgm;
-                chartData.datasets[3].data[labelIndex] = data.insulin;
-                pcpoCumulativeReward += data.reward;
-                // If PPO didn't provide meal data for this step, PCPO can
-                if(chartData.datasets[4].data[labelIndex] == null || chartData.datasets[4].data[labelIndex] === 0) {
-                     chartData.datasets[4].data[labelIndex] = data.meal;
                 }
-            }
-            
-            // Keep chart from growing indefinitely large
-            if (chartData.labels.length > maxChartPoints) {
-                chartData.labels.shift();
-                chartData.datasets.forEach(ds => ds.data.shift());
-            }
+                
+                updateStatus('Starting simulation...');
+                resetCharts(); 
+                socket.emit('start_continuous_simulation', { meals: meals });
+                startSimBtn.disabled = true;
+                stopSimBtn.disabled = false;
+            });
 
-            simulationChart.update();
-            updateRewardDisplay();
-            progressInfo.textContent = `Current global step: ${currentGlobalStep}`;
+            stopSimBtn.addEventListener('click', function () {
+                updateStatus('Sending stop signal...');
+                socket.emit('stop_continuous_simulation');
+            });
+
+            socket.on('connect', function () { updateStatus('Connected to server.'); });
+            socket.on('disconnect', function () {
+                updateStatus('Disconnected from server.', true);
+                startSimBtn.disabled = false;
+                stopSimBtn.disabled = true;
+            });
+            socket.on('connection_ack', function (data) { console.log('Connection ACK:', data.message); });
+
+            socket.on('simulation_metadata', function(data) {
+                console.log('Simulation metadata:', data);
+                patientMetadataDiv.textContent = `Patient: ${data.patient_name}, Sampling Rate: ${data.sampling_rate} min/step`;
+                samplingRate = data.sampling_rate || 5;
+                calculateMaxPoints(); // Recalculate maxPointsPerDay with actual samplingRate
+            });
+
+            socket.on('simulation_starting_continuous', function (data) {
+                updateStatus(data.message);
+                console.log("Simulation starting (continuous)...");
+            });
+
+            socket.on('simulation_data_point', function (data) {
+                const step = data.step;
+                let redraw = false; // Flag to redraw only once after all series updates
+
+                // Determine if we need to shift the x-axis
+                let shift = false;
+                if (cgmChart.series[0].data.length >= maxPointsPerDay) {
+                    shift = true;
+                }
+
+                // Update currentMinStep for x-axis extremes
+                if (step >= maxPointsPerDay) {
+                    currentMinStep = step - maxPointsPerDay + 1;
+                } else {
+                    currentMinStep = 0;
+                }
+                
+                // Add points to CGM chart
+                if (cgmChart && cgmChart.series) {
+                    if (data.hasOwnProperty('ppo_cgm')) {
+                        // addPoint(point, redraw, shift, animation)
+                        cgmChart.series[0].addPoint([step, data.ppo_cgm], false, shift, true);
+                    }
+                    if (data.hasOwnProperty('pcpo_cgm')) {
+                        cgmChart.series[1].addPoint([step, data.pcpo_cgm], false, shift, true);
+                    }
+                    if (data.hasOwnProperty('meal') && data.meal > 0) {
+                        cgmChart.series[2].addPoint([step, data.meal], false, shift, true);
+                    }
+                    redraw = true;
+                }
+
+                // Add points to Insulin chart
+                if (insulinChart && insulinChart.series) {
+                     if (data.hasOwnProperty('ppo_insulin')) {
+                        insulinChart.series[0].addPoint([step, data.ppo_insulin], false, shift, true);
+                    }
+                    if (data.hasOwnProperty('pcpo_insulin')) {
+                        insulinChart.series[1].addPoint([step, data.pcpo_insulin], false, shift, true);
+                    }
+                    redraw = true;
+                }
+
+                // Add points to Reward chart
+                if (rewardChart && rewardChart.series) {
+                    if (data.hasOwnProperty('ppo_reward')) {
+                        rewardChart.series[0].addPoint([step, data.ppo_reward], false, shift, true);
+                    }
+                    if (data.hasOwnProperty('pcpo_reward')) {
+                        rewardChart.series[1].addPoint([step, data.pcpo_reward], false, shift, true);
+                    }
+                    redraw = true;
+                }
+                
+                if (redraw) {
+                    const currentMaxStep = step; // The newest point defines the max of our window
+                    const newMinStep = Math.max(0, currentMaxStep - maxPointsPerDay +1);
+
+                    cgmChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
+                    insulinChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
+                    rewardChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
+                    
+                    cgmChart.redraw();
+                    insulinChart.redraw();
+                    rewardChart.redraw();
+                }
+            });
+
+            socket.on('segment_complete', function(data) {
+                console.log(`Segment ${data.segment_number} complete (${data.steps_in_segment} steps).`);
+                updateStatus(`Segment ${data.segment_number} processed.`);
+            });
+
+            socket.on('simulation_finished', function (data) {
+                updateStatus(data.message || 'Simulation finished.');
+                startSimBtn.disabled = false;
+                stopSimBtn.disabled = true;
+            });
+
+            socket.on('simulation_stopping_ack', function(data) {
+                updateStatus(data.message);
+                console.log("Simulation stopping ack received.");
+            });
+
+            socket.on('simulation_error', function (data) {
+                updateStatus(`Error: ${data.error}`, true);
+                console.error('Simulation Error:', data.error);
+                startSimBtn.disabled = false;
+                stopSimBtn.disabled = true;
+            });
         });
-
-        socket.on('segment_complete', (data) => {
-            console.log(`Backend: Segment ${data.segment_number} complete.`);
-            statusMessage.textContent = `Segment ${data.segment_number} complete. Starting next...`;
-        });
-        
-        socket.on('simulation_finished', (data) => {
-            console.log('Backend: Simulation finished.', data.message);
-            statusMessage.textContent = data.message || "Simulation finished.";
-            startSimButton.disabled = false;
-            finishSimButton.disabled = true;
-        });
-
-        socket.on('simulation_error', (data) => {
-            console.error('Backend: Simulation error:', data.error);
-            errorMessage.textContent = `Error: ${data.agent ? data.agent + ': ' : ''}${data.error}`;
-            statusMessage.textContent = "Simulation encountered an error.";
-            startSimButton.disabled = false; // Allow retrying
-            finishSimButton.disabled = true;
-        });
-
-        socket.on('disconnect', (reason) => {
-            console.log("Socket disconnected:", reason);
-            statusMessage.textContent = "Disconnected from server. Check console.";
-            // startSimButton.disabled = true; // Or attempt auto-reconnect
-            finishSimButton.disabled = true;
-        });
-
-
-        // Event Listeners
-        addMealButton.addEventListener('click', addMealEntry);
-        startSimButton.addEventListener('click', startContinuousSimulation);
-        finishSimButton.addEventListener('click', finishContinuousSimulation);
-
-        // Initial setup
-        window.onload = () => {
-            initializeChart();
-            addMealEntry(); 
-        };
     </script>
 </body>
 </html>
