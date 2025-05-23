@@ -50,7 +50,7 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            const socket = io(); // Connect to the server
+            const socket = io(); 
 
             const startSimBtn = document.getElementById('start-sim-btn');
             const stopSimBtn = document.getElementById('stop-sim-btn');
@@ -61,17 +61,16 @@
 
             let cgmChart, insulinChart, rewardChart;
             
-            // Constants from your app.py (or pass via metadata)
-            const SIM_DURATION_MINUTES_PER_SEGMENT = 24 * 60; // This is per segment
-            let samplingRate = 5; // Default, will be updated by metadata from server
-            let maxPointsPerDay; // Will be calculated once samplingRate is known
+            const SIM_DURATION_MINUTES_PER_SEGMENT = 24 * 60; 
+            let samplingRate = 5; 
+            let maxPointsPerDay; 
 
-            let currentMinStep = 0; // To keep track of the x-axis window
+            let currentMinStep = 0; 
 
             function calculateMaxPoints() {
                 maxPointsPerDay = SIM_DURATION_MINUTES_PER_SEGMENT / samplingRate;
             }
-            calculateMaxPoints(); // Initial calculation with default sampling rate
+            calculateMaxPoints(); 
 
             function updateStatus(message, isError = false) {
                 statusMessageDiv.textContent = message;
@@ -82,14 +81,13 @@
                 const commonChartOptions = {
                     chart: { 
                         zoomType: 'x',
-                        animation: Highcharts.svg, // Enable animations
+                        animation: Highcharts.svg, 
                         marginRight: 10,
                      },
                     title: { text: null },
                     xAxis: {
                         type: 'linear',
                         title: { text: 'Simulation Step' },
-                        // tickPixelInterval: 150 // Adjust for better label spacing
                     },
                     credits: { enabled: false },
                     legend: { enabled: true },
@@ -97,16 +95,12 @@
                         line: { marker: { enabled: false } },
                         column: { pointPadding: 0, borderWidth: 0, groupPadding: 0.1}
                     },
-                    // Optional: To disable series animation on initial load, but keep for updates
-                    // series: {
-                    //     animation: false 
-                    // }
                 };
 
                 cgmChart = Highcharts.chart('cgm-chart-container', Highcharts.merge(commonChartOptions, {
                     title: { text: 'CGM Levels & Meals' },
                     yAxis: [
-                        { // Primary yAxis for CGM
+                        { 
                             title: { text: 'CGM (mg/dL)' },
                             min: 0, max: 400, 
                              plotLines: [{
@@ -115,7 +109,7 @@
                                 value: 180, color: 'orange', dashStyle: 'shortdash', width: 1, label: { text: 'Hyper (180)'}
                             }]
                         },
-                        { // Secondary yAxis for Meals
+                        { 
                             title: { text: 'Meal (carbs g)' },
                             opposite: true,
                             min: 0
@@ -148,10 +142,10 @@
             }
             
             function resetCharts() {
-                currentMinStep = 0; // Reset x-axis window tracking
+                currentMinStep = 0; 
                 if (cgmChart) {
                     cgmChart.series.forEach(s => s.setData([], false));
-                    cgmChart.xAxis[0].setExtremes(null, null, false); // Reset x-axis extremes
+                    cgmChart.xAxis[0].setExtremes(null, null, false); 
                     cgmChart.redraw();
                 }
                 if (insulinChart) {
@@ -219,7 +213,7 @@
                 console.log('Simulation metadata:', data);
                 patientMetadataDiv.textContent = `Patient: ${data.patient_name}, Sampling Rate: ${data.sampling_rate} min/step`;
                 samplingRate = data.sampling_rate || 5;
-                calculateMaxPoints(); // Recalculate maxPointsPerDay with actual samplingRate
+                calculateMaxPoints(); 
             });
 
             socket.on('simulation_starting_continuous', function (data) {
@@ -229,25 +223,14 @@
 
             socket.on('simulation_data_point', function (data) {
                 const step = data.step;
-                let redraw = false; // Flag to redraw only once after all series updates
-
-                // Determine if we need to shift the x-axis
+                let redraw = false; 
                 let shift = false;
                 if (cgmChart.series[0].data.length >= maxPointsPerDay) {
                     shift = true;
                 }
-
-                // Update currentMinStep for x-axis extremes
-                if (step >= maxPointsPerDay) {
-                    currentMinStep = step - maxPointsPerDay + 1;
-                } else {
-                    currentMinStep = 0;
-                }
                 
-                // Add points to CGM chart
                 if (cgmChart && cgmChart.series) {
                     if (data.hasOwnProperty('ppo_cgm')) {
-                        // addPoint(point, redraw, shift, animation)
                         cgmChart.series[0].addPoint([step, data.ppo_cgm], false, shift, true);
                     }
                     if (data.hasOwnProperty('pcpo_cgm')) {
@@ -259,7 +242,6 @@
                     redraw = true;
                 }
 
-                // Add points to Insulin chart
                 if (insulinChart && insulinChart.series) {
                      if (data.hasOwnProperty('ppo_insulin')) {
                         insulinChart.series[0].addPoint([step, data.ppo_insulin], false, shift, true);
@@ -270,7 +252,6 @@
                     redraw = true;
                 }
 
-                // Add points to Reward chart
                 if (rewardChart && rewardChart.series) {
                     if (data.hasOwnProperty('ppo_reward')) {
                         rewardChart.series[0].addPoint([step, data.ppo_reward], false, shift, true);
@@ -282,7 +263,7 @@
                 }
                 
                 if (redraw) {
-                    const currentMaxStep = step; // The newest point defines the max of our window
+                    const currentMaxStep = step; 
                     const newMinStep = Math.max(0, currentMaxStep - maxPointsPerDay +1);
 
                     cgmChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
