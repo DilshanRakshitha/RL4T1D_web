@@ -28,12 +28,12 @@ if not flask_logger.handlers:
 
 MODEL_DIR = "./models/"
 PPO_MODEL_FILENAME_BASE = "ppo_model_for_patient_{}"
-PCPO_MODEL_FILENAME_BASE = "pcpo_model_for_patient_{}"
+SRPO_MODEL_FILENAME_BASE = "srpo_model_for_patient_{}"
 SWITCHING_MODEL_FILENAME_BASE = "switching_model_for_patient_{}"
 
 MODEL_FILENAME_BASES = {
     "ppo": PPO_MODEL_FILENAME_BASE,
-    "pcpo": PCPO_MODEL_FILENAME_BASE,
+    "srpo": SRPO_MODEL_FILENAME_BASE,
     "switching": SWITCHING_MODEL_FILENAME_BASE
 }
 
@@ -42,8 +42,8 @@ SIM_SAMPLING_RATE = 5
 MIN_ALIVE_STEPS_THRESHOLD = 5 # If an algo runs for fewer than this many steps in a segment, it's considered "dead" for future segments.
 
 VALID_PATIENT_IDS = [str(i) for i in range(9)] + [str(i) for i in range(20, 30)]
-VALID_COMPARISON_MODES = ["ppo_vs_pcpo", "ppo_vs_switching", "pcpo_vs_switching"]
-ALGORITHMS = ["ppo", "pcpo", "switching"] # For validation
+VALID_COMPARISON_MODES = ["ppo_vs_srpo", "ppo_vs_switching", "srpo_vs_switching"]
+ALGORITHMS = ["ppo", "srpo", "switching"] # For validation
 
 running_simulations_stop_events = {}
 client_meal_schedules = {}

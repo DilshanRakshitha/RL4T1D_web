@@ -43,9 +43,9 @@
             <div>
                 <label for="comparisonModeSelect">Select Comparison Mode:</label>
                 <select id="comparisonModeSelect">
-                    <option value="ppo_vs_pcpo">Compare PPO vs. PCPO</option>
+                    <option value="ppo_vs_srpo">Compare PPO vs. SRPO</option>
                     <option value="ppo_vs_switching">Compare PPO vs. Switching</option>
-                    <option value="pcpo_vs_switching">Compare PCPO vs. Switching</option>
+                    <option value="srpo_vs_switching">Compare SRPO vs. Switching</option>
                 </select>
             </div>
             <div>
@@ -92,11 +92,11 @@
     let cgmChart, insulinChart, rewardChart;
 
     let cgmSeriesPPO, insulinSeriesPPO, rewardSeriesPPO;
-    let cgmSeriesPCPO, insulinSeriesPCPO, rewardSeriesPCPO;
+    let cgmSeriesSRPO, insulinSeriesSRPO, rewardSeriesSRPO;
     let cgmSeriesSwitching, insulinSeriesSwitching, rewardSeriesSwitching;
 
     let currentSimPatient = '';
-    let algorithmsInComparison = []; // e.g., ["ppo", "pcpo"]
+    let algorithmsInComparison = []; // e.g., ["ppo", "srpo"]
     let simSamplingRate = 5;
 
     const mealsData = [];
@@ -182,12 +182,12 @@
             },
             series: [
                 { name: 'PPO CGM', data: [], id: 'cgmSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
-                { name: 'PCPO CGM', data: [], id: 'cgmSeriesPCPO', color: Highcharts.getOptions().colors[1], visible: false },
+                { name: 'SRPO CGM', data: [], id: 'cgmSeriesSRPO', color: Highcharts.getOptions().colors[1], visible: false },
                 { name: 'Switching CGM', data: [], id: 'cgmSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
             ]
         }));
         cgmSeriesPPO = cgmChart.get('cgmSeriesPPO');
-        cgmSeriesPCPO = cgmChart.get('cgmSeriesPCPO');
+        cgmSeriesSRPO = cgmChart.get('cgmSeriesSRPO');
         cgmSeriesSwitching = cgmChart.get('cgmSeriesSwitching');
 
         insulinChart = Highcharts.chart('insulinChart', Highcharts.merge(commonOptions, {
@@ -195,12 +195,12 @@
             yAxis: { title: { text: 'Insulin (U)' }, min: 0 },
             series: [
                 { name: 'PPO Insulin', data: [], id: 'insulinSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
-                { name: 'PCPO Insulin', data: [], id: 'insulinSeriesPCPO', color: Highcharts.getOptions().colors[1], visible: false },
+                { name: 'SRPO Insulin', data: [], id: 'insulinSeriesSRPO', color: Highcharts.getOptions().colors[1], visible: false },
                 { name: 'Switching Insulin', data: [], id: 'insulinSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
             ]
         }));
         insulinSeriesPPO = insulinChart.get('insulinSeriesPPO');
-        insulinSeriesPCPO = insulinChart.get('insulinSeriesPCPO');
+        insulinSeriesSRPO = insulinChart.get('insulinSeriesSRPO');
         insulinSeriesSwitching = insulinChart.get('insulinSeriesSwitching');
 
         rewardChart = Highcharts.chart('rewardChart', Highcharts.merge(commonOptions, {
@@ -208,18 +208,18 @@
             yAxis: { title: { text: 'Reward Value' } },
             series: [
                 { name: 'PPO Reward', data: [], id: 'rewardSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
-                { name: 'PCPO Reward', data: [], id: 'rewardSeriesPCPO', color: Highcharts.getOptions().colors[1], visible: false },
+                { name: 'SRPO Reward', data: [], id: 'rewardSeriesSRPO', color: Highcharts.getOptions().colors[1], visible: false },
                 { name: 'Switching Reward', data: [], id: 'rewardSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
             ]
         }));
         rewardSeriesPPO = rewardChart.get('rewardSeriesPPO');
-        rewardSeriesPCPO = rewardChart.get('rewardSeriesPCPO');
+        rewardSeriesSRPO = rewardChart.get('rewardSeriesSRPO');
         rewardSeriesSwitching = rewardChart.get('rewardSeriesSwitching');
     }
 
     function getSeriesForAlgo(algoTag) {
         if (algoTag === 'ppo') return { cgm: cgmSeriesPPO, ins: insulinSeriesPPO, rew: rewardSeriesPPO };
-        if (algoTag === 'pcpo') return { cgm: cgmSeriesPCPO, ins: insulinSeriesPCPO, rew: rewardSeriesPCPO };
+        if (algoTag === 'srpo') return { cgm: cgmSeriesSRPO, ins: insulinSeriesSRPO, rew: rewardSeriesSRPO };
         if (algoTag === 'switching') return { cgm: cgmSeriesSwitching, ins: insulinSeriesSwitching, rew: rewardSeriesSwitching };
         return null;
     }
@@ -227,7 +227,7 @@
     function updateChartVisibility(algorithmsToDisplay) {
         const allAlgoSeries = {
             'ppo': { cgm: cgmSeriesPPO, ins: insulinSeriesPPO, rew: rewardSeriesPPO },
-            'pcpo': { cgm: cgmSeriesPCPO, ins: insulinSeriesPCPO, rew: rewardSeriesPCPO },
+            'srpo': { cgm: cgmSeriesSRPO, ins: insulinSeriesSRPO, rew: rewardSeriesSRPO },
             'switching': { cgm: cgmSeriesSwitching, ins: insulinSeriesSwitching, rew: rewardSeriesSwitching }
         };
         let needsOverallRedraw = false;
@@ -256,7 +256,7 @@
         document.getElementById('stopButton').disabled = false;
 
         [cgmSeriesPPO, insulinSeriesPPO, rewardSeriesPPO,
-         cgmSeriesPCPO, insulinSeriesPCPO, rewardSeriesPCPO,
+         cgmSeriesSRPO, insulinSeriesSRPO, rewardSeriesSRPO,
          cgmSeriesSwitching, insulinSeriesSwitching, rewardSeriesSwitching].forEach(s => s.setData([], false));
 
         currentXAxisMealPlotLines = [];
