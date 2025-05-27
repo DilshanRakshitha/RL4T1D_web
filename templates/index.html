@@ -2,372 +2,383 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RL Simulation Dashboard</title>
+    <title>T1D RL Simulation Comparison</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script src="https://code.highcharts.com/highcharts.js"></script>
-    <script src="https://code.highcharts.com/modules/accessibility.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        .controls, .status, .charts { margin-bottom: 20px; }
-        .chart-container { border: 1px solid #ccc; margin-bottom: 15px; min-width: 310px; height: 400px;}
-        .meal-entry { margin-bottom: 5px; }
-        .meal-entry input { margin-right: 5px; width: 80px; }
-        button { padding: 8px 15px; margin-right: 10px; cursor: pointer; }
-        #status-message { padding: 10px; border: 1px solid #eee; background-color: #f9f9f9; min-height: 20px;}
-        .error { color: red; font-weight: bold; }
-        .metadata { font-size: 0.9em; color: #555; }
-        .progress { font-style: italic; color: #337ab7; } 
-        .info { color: black; } 
-        .highcharts-plot-line-label.meal-label { 
-            font-size: 9px !important; 
-            fill: #c0392b !important; 
-            font-weight: bold !important;
-            background-color: rgba(255, 255, 255, 0.7); /* Optional: slight background for readability */
-            padding: 2px;
-            border-radius: 2px;
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; text-align: center; }
+        .controls, .meal-entry, .simulation-status { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9;}
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="number"], select { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 15px; color: white; background-color: #007bff; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #stopButton { background-color: #dc3545; }
+        #stopButton:hover { background-color: #c82333; }
+        #chartsContainer { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; }
+        .chart {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #fff;
+            padding:10px;
         }
+        #cgmChart { height: 500px; }
+        #insulinChart, #rewardChart { height: 300px; }
+
+        #status, #progress { margin-top:10px; padding:10px; background-color: #e9ecef; border-radius:4px; text-align: center;}
+        ul#mealList { list-style-type: none; padding: 0; }
+        ul#mealList li { background-color: #e9ecef; margin-bottom: 5px; padding: 8px; border-radius: 3px; display: flex; justify-content: space-between; align-items: center; }
+        .remove-meal { background-color: #ffc107; color: black; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }
+        .remove-meal:hover { background-color: #e0a800; }
     </style>
 </head>
 <body>
-    <h1>Reinforcement Learning Simulation</h1>
+    <div class="container">
+        <h1>Type 1 Diabetes Reinforcement Learning Simulation</h1>
 
-    <div class="controls">
-        <h2>Meal Schedule</h2>
-        <div id="meal-schedule">
-            <div class="meal-entry">
-                Meal 1: Time (min from start): <input type="number" class="meal-time" value="480"> Carbs (g): <input type="number" class="meal-carbs" value="50">
+        <div class="controls">
+            <h2>Controls</h2>
+            <div>
+                <label for="comparisonModeSelect">Select Comparison Mode:</label>
+                <select id="comparisonModeSelect">
+                    <option value="ppo_vs_pcpo">Compare PPO vs. PCPO</option>
+                    <option value="ppo_vs_switching">Compare PPO vs. Switching</option>
+                    <option value="pcpo_vs_switching">Compare PCPO vs. Switching</option>
+                </select>
             </div>
-             <div class="meal-entry">
-                Meal 2: Time (min from start): <input type="number" class="meal-time" value="720"> Carbs (g): <input type="number" class="meal-carbs" value="30">
+            <div>
+                <label for="patientSelect">Select Patient ID:</label>
+                <select id="patientSelect">
+                    <!-- Options will be populated by JavaScript -->
+                </select>
             </div>
         </div>
-        <button id="add-meal-btn">Add Another Meal</button>
-        <hr>
-        <button id="start-sim-btn">Start Continuous Simulation</button>
-        <button id="stop-sim-btn" disabled>Stop Continuous Simulation</button>
+
+        <div class="meal-entry">
+            <h2>Meal Entry (24-hour cycle)</h2>
+            <div>
+                <label for="mealTime">Meal Time (minutes from start of day, e.g., 8 AM = 480):</label>
+                <input type="number" id="mealTime" placeholder="e.g., 480 for 8 AM" min="0" max="1439">
+            </div>
+            <div>
+                <label for="mealCarbs">Carbohydrates (grams):</label>
+                <input type="number" id="mealCarbs" placeholder="e.g., 50" min="0">
+            </div>
+            <button onclick="addMeal()">Add Meal</button>
+            <h3>Scheduled Meals:</h3>
+            <ul id="mealList"></ul>
+        </div>
+
+        <div class="simulation-status">
+            <h2>Simulation</h2>
+            <button id="startButton" onclick="startContinuousSimulation()">Start Simulation</button>
+            <button id="stopButton" onclick="stopContinuousSimulation()" disabled>Stop Simulation</button>
+            <div id="status">Status: Idle</div>
+            <div id="progress">Progress: Waiting to start...</div>
+            <div id="currentSimInfo" style="margin-top:10px; font-weight:bold; text-align: center;"></div>
+        </div>
+
+        <div id="chartsContainer">
+            <div id="cgmChart" class="chart"></div>
+            <div id="insulinChart" class="chart"></div>
+            <div id="rewardChart" class="chart"></div>
+        </div>
     </div>
 
-    <div class="status">
-        <h2>Status</h2>
-        <div id="status-message" class="info">Not connected.</div>
-        <div id="patient-metadata" class="metadata"></div>
-    </div>
+<script>
+    const socket = io({ transports: ['websocket', 'polling'] });
+    let cgmChart, insulinChart, rewardChart;
 
-    <div class="charts">
-        <h2>Simulation Data</h2>
-        <div id="cgm-chart-container" class="chart-container"></div>
-        <div id="insulin-chart-container" class="chart-container"></div>
-        <div id="reward-chart-container" class="chart-container"></div>
-    </div>
+    let cgmSeriesPPO, insulinSeriesPPO, rewardSeriesPPO;
+    let cgmSeriesPCPO, insulinSeriesPCPO, rewardSeriesPCPO;
+    let cgmSeriesSwitching, insulinSeriesSwitching, rewardSeriesSwitching;
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            const socket = io(); 
+    let currentSimPatient = '';
+    let algorithmsInComparison = []; // e.g., ["ppo", "pcpo"]
+    let simSamplingRate = 5;
 
-            const startSimBtn = document.getElementById('start-sim-btn');
-            const stopSimBtn = document.getElementById('stop-sim-btn');
-            const addMealBtn = document.getElementById('add-meal-btn');
-            const mealScheduleDiv = document.getElementById('meal-schedule');
-            const statusMessageDiv = document.getElementById('status-message');
-            const patientMetadataDiv = document.getElementById('patient-metadata');
+    const mealsData = [];
+    let currentXAxisMealPlotLines = []; // Holds definitions for meal plotlines
 
-            let cgmChart, insulinChart, rewardChart;
-            
-            const SIM_DURATION_MINUTES_PER_SEGMENT = 24 * 60; 
-            let samplingRate = 5; 
-            let maxPointsPerDay; 
-
-            function calculateMaxPoints() {
-                maxPointsPerDay = SIM_DURATION_MINUTES_PER_SEGMENT / samplingRate;
-            }
-            calculateMaxPoints(); 
-
-            function updateStatus(message, type = 'info') { 
-                statusMessageDiv.textContent = message;
-                statusMessageDiv.className = type; 
-            }
-
-            function initCharts() {
-                const commonChartOptions = {
-                    chart: { 
-                        zoomType: 'x',
-                        animation: Highcharts.svg, 
-                        marginRight: 10,
-                     },
-                    title: { text: null },
-                    xAxis: {
-                        type: 'linear',
-                        title: { text: 'Simulation Step (Global)' }, // X-axis is global step
-                        plotLines: [] 
-                    },
-                    credits: { enabled: false },
-                    legend: { enabled: true },
-                    plotOptions: {
-                        line: { marker: { enabled: false } },
-                        column: { pointPadding: 0, borderWidth: 0, groupPadding: 0.1, color: 'rgba(124, 181, 236, 0.5)' } 
-                    },
-                };
-
-                cgmChart = Highcharts.chart('cgm-chart-container', Highcharts.merge(commonChartOptions, {
-                    title: { text: 'CGM Levels & Meals' },
-                    yAxis: [
-                        { 
-                            title: { text: 'CGM (mg/dL)' },
-                            min: 0, max: 400, 
-                             plotLines: [{
-                                value: 70, color: 'red', dashStyle: 'shortdash', width: 1, zIndex: 3, label: { text: 'Hypo (70)'}
-                            }, {
-                                value: 180, color: 'orange', dashStyle: 'shortdash', width: 1, zIndex: 3, label: { text: 'Hyper (180)'}
-                            }]
-                        },
-                        // Remove secondary Y-axis for meal bars if plotLines are primary
-                        // { 
-                        //     title: { text: 'Meal (carbs g)' },
-                        //     opposite: true,
-                        //     min: 0,
-                        //     gridLineWidth: 0 
-                        // }
-                    ],
-                    series: [
-                        { name: 'PPO CGM', type: 'line', yAxis: 0, data: [], zIndex: 2 },
-                        { name: 'PCPO CGM', type: 'line', yAxis: 0, data: [], zIndex: 2 },
-                        // Remove this series if you're only using plotLines for meals
-                        // { name: 'Meal Data (Carbs)', type: 'column', yAxis: 1, data: [], tooltip: { valueSuffix: ' g' }, zIndex: 1 }
-                    ]
-                }));
-
-                // ... (insulinChart and rewardChart init remain the same) ...
-                insulinChart = Highcharts.chart('insulin-chart-container', Highcharts.merge(commonChartOptions, {
-                    title: { text: 'Insulin Delivery' },
-                    yAxis: { title: { text: 'Insulin (U)' }, min: 0 },
-                    series: [
-                        { name: 'PPO Insulin', type: 'line', data: [] },
-                        { name: 'PCPO Insulin', type: 'line', data: [] }
-                    ]
-                }));
-
-                rewardChart = Highcharts.chart('reward-chart-container', Highcharts.merge(commonChartOptions, {
-                    title: { text: 'Rewards' },
-                    yAxis: { title: { text: 'Reward' } },
-                    series: [
-                        { name: 'PPO Reward', type: 'line', data: [] },
-                        { name: 'PCPO Reward', type: 'line', data: [] }
-                    ]
-                }));
-            }
-            
-            function removeAllMealPlotLines(chart) {
-                if (chart && chart.xAxis && chart.xAxis[0]) {
-                    let xAxis = chart.xAxis[0];
-                    for (let i = xAxis.plotLinesAndBands.length - 1; i >= 0; i--) {
-                        if (xAxis.plotLinesAndBands[i].options.id && xAxis.plotLinesAndBands[i].options.id.startsWith('meal-line-')) {
-                            xAxis.removePlotLine(xAxis.plotLinesAndBands[i].options.id);
-                        }
-                    }
-                }
-            }
-
-            function resetCharts() {
-                if (cgmChart) {
-                    cgmChart.series.forEach(s => s.setData([], false));
-                    removeAllMealPlotLines(cgmChart);
-                    cgmChart.xAxis[0].setExtremes(null, null, false); 
-                    cgmChart.redraw();
-                }
-                if (insulinChart) {
-                    insulinChart.series.forEach(s => s.setData([], false));
-                     removeAllMealPlotLines(insulinChart); // If you add meal lines to other charts
-                    insulinChart.xAxis[0].setExtremes(null, null, false);
-                    insulinChart.redraw();
-                }
-                if (rewardChart) {
-                    rewardChart.series.forEach(s => s.setData([], false));
-                     removeAllMealPlotLines(rewardChart); // If you add meal lines to other charts
-                    rewardChart.xAxis[0].setExtremes(null, null, false);
-                    rewardChart.redraw();
-                }
-            }
-
-            initCharts();
-
-            // ... (addMealBtn and startSimBtn event listeners remain the same) ...
-             addMealBtn.addEventListener('click', function () {
-                const mealCount = mealScheduleDiv.children.length + 1;
-                const newMealEntry = document.createElement('div');
-                newMealEntry.className = 'meal-entry';
-                newMealEntry.innerHTML = `
-                    Meal ${mealCount}: Time (min from start): <input type="number" class="meal-time"> Carbs (g): <input type="number" class="meal-carbs">
-                `;
-                mealScheduleDiv.appendChild(newMealEntry);
-            });
-
-            startSimBtn.addEventListener('click', function () {
-                const mealEntries = mealScheduleDiv.getElementsByClassName('meal-entry');
-                const meals = []; // This will be array of {time_minutes: X, carbs: Y}
-                for (let entry of mealEntries) {
-                    const timeInput = entry.querySelector('.meal-time');
-                    const carbsInput = entry.querySelector('.meal-carbs');
-                    const time = parseInt(timeInput.value, 10);
-                    const carbs = parseFloat(carbsInput.value);
-
-                    if (!isNaN(time) && !isNaN(carbs) && time >= 0 && carbs >= 0) {
-                        meals.push({ time_minutes: time, carbs: carbs });
-                    } else if (timeInput.value || carbsInput.value) { 
-                        alert('Please enter valid, non-negative numbers for all meal times and carbs, or leave them blank to ignore.');
-                        return;
-                    }
-                }
-                
-                updateStatus('Starting simulation...', 'info');
-                resetCharts(); 
-                socket.emit('start_continuous_simulation', { meals: meals }); // Send structured meal data
-                startSimBtn.disabled = true;
-                stopSimBtn.disabled = false;
-            });
-
-            stopSimBtn.addEventListener('click', function () {
-                updateStatus('Sending stop signal...', 'info');
-                socket.emit('stop_continuous_simulation');
-            });
-
-            // ... (socket.on 'connect', 'disconnect', 'connection_ack', 'simulation_metadata', 'simulation_starting_continuous', 'simulation_progress' remain same)
-            socket.on('connect', function () { updateStatus('Connected to server.', 'info'); });
-            socket.on('disconnect', function () {
-                updateStatus('Disconnected from server.', 'error');
-                startSimBtn.disabled = false;
-                stopSimBtn.disabled = true;
-            });
-            socket.on('connection_ack', function (data) { console.log('Connection ACK:', data.message); });
-
-            socket.on('simulation_metadata', function(data) {
-                console.log('Simulation metadata:', data);
-                patientMetadataDiv.textContent = `Patient: ${data.patient_name}, Sampling Rate: ${data.sampling_rate} min/step`;
-                samplingRate = data.sampling_rate || 5;
-                calculateMaxPoints(); 
-            });
-
-            socket.on('simulation_starting_continuous', function (data) {
-                updateStatus(data.message, 'info');
-                console.log("Simulation starting (continuous)...");
-            });
-
-            socket.on('simulation_progress', function(data) {
-                console.log('Simulation Progress:', data.message);
-                updateStatus(data.message, 'progress');
-            });
-            
-            // New handler for meal markers
-            socket.on('meal_markers', function(data) {
-                console.log("Received meal markers:", data.markers);
-                if (cgmChart && cgmChart.xAxis && cgmChart.xAxis[0]) {
-                    removeAllMealPlotLines(cgmChart); // Clear old meal lines first
-                    data.markers.forEach(marker => {
-                        cgmChart.xAxis[0].addPlotLine({
-                            value: marker.step,
-                            color: '#e74c3c', // Brighter Red
-                            width: 1.5,
-                            dashStyle: 'Dot', // Dotted line
-                            id: `meal-line-${marker.step}`,
-                            zIndex: 4,
-                            label: {
-                                text: `${marker.carbs.toFixed(0)}g`,
-                                align: 'center',
-                                y: 12, // Position below the line
-                                style: { color: '#c0392b', },
-                                className: 'meal-label'
-                            }
-                        });
-                    });
-                }
-            });
-
-
-            socket.on('simulation_data_point', function (data) {
-                if (statusMessageDiv.classList.contains('progress')) {
-                    updateStatus('Simulation running...', 'info');
-                }
-
-                const step = data.step;
-                let redrawRequired = false; 
-                let shift = (cgmChart.series[0].data.length >= maxPointsPerDay);
-                
-                if (cgmChart && cgmChart.series) {
-                    if (data.hasOwnProperty('ppo_cgm')) {
-                        cgmChart.series[0].addPoint([step, data.ppo_cgm], false, shift, true);
-                    }
-                    if (data.hasOwnProperty('pcpo_cgm')) {
-                        cgmChart.series[1].addPoint([step, data.pcpo_cgm], false, shift, true);
-                    }
-                    // The meal data from data.meal is for the column series, if you keep it.
-                    // The plotLines are now handled by the 'meal_markers' event.
-                    // if (data.hasOwnProperty('meal') && cgmChart.series[2]) { 
-                    //      cgmChart.series[2].addPoint([step, data.meal > 0 ? data.meal : null], false, shift, true);
-                    // }
-                    redrawRequired = true;
-                }
-
-                if (insulinChart && insulinChart.series) {
-                     if (data.hasOwnProperty('ppo_insulin')) {
-                        insulinChart.series[0].addPoint([step, data.ppo_insulin], false, shift, true);
-                    }
-                    if (data.hasOwnProperty('pcpo_insulin')) {
-                        insulinChart.series[1].addPoint([step, data.pcpo_insulin], false, shift, true);
-                    }
-                    redrawRequired = true;
-                }
-
-                if (rewardChart && rewardChart.series) {
-                    if (data.hasOwnProperty('ppo_reward')) {
-                        rewardChart.series[0].addPoint([step, data.ppo_reward], false, shift, true);
-                    }
-                    if (data.hasOwnProperty('pcpo_reward')) {
-                        rewardChart.series[1].addPoint([step, data.pcpo_reward], false, shift, true);
-                    }
-                    redrawRequired = true;
-                }
-                
-                if (redrawRequired) {
-                    const currentMaxStep = step; 
-                    const newMinStep = Math.max(0, currentMaxStep - maxPointsPerDay + 1);
-
-                    // We don't need to remove meal plotlines here anymore if they are managed by 'meal_markers' event
-                    // and setExtremes. Highcharts will hide lines outside the extremes.
-
-                    cgmChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
-                    insulinChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
-                    rewardChart.xAxis[0].setExtremes(newMinStep, currentMaxStep, false);
-                    
-                    cgmChart.redraw();
-                    insulinChart.redraw();
-                    rewardChart.redraw();
-                }
-            });
-
-            // ... (segment_complete, simulation_finished, etc. handlers remain the same) ...
-             socket.on('segment_complete', function(data) {
-                console.log(`Segment ${data.segment_number} complete (${data.steps_in_segment} steps).`);
-                // Backend will emit new meal_markers for the next view window before streaming next segment
-            });
-
-            socket.on('simulation_finished', function (data) {
-                updateStatus(data.message || 'Simulation finished.', 'info');
-                startSimBtn.disabled = false;
-                stopSimBtn.disabled = true;
-            });
-
-            socket.on('simulation_stopping_ack', function(data) {
-                updateStatus(data.message, 'info');
-                console.log("Simulation stopping ack received.");
-            });
-
-            socket.on('simulation_error', function (data) {
-                updateStatus(`Error: ${data.error}`, 'error');
-                console.error('Simulation Error:', data.error);
-                startSimBtn.disabled = false;
-                stopSimBtn.disabled = true;
-            });
+    function populatePatientSelect() {
+        const patientSelect = document.getElementById('patientSelect');
+        const patientIds = [];
+        for (let i = 0; i <= 8; i++) patientIds.push(i.toString());
+        for (let i = 20; i <= 29; i++) patientIds.push(i.toString());
+        patientIds.forEach(id => {
+            const option = document.createElement('option');
+            option.value = id;
+            option.textContent = `Patient ${id}`;
+            patientSelect.appendChild(option);
         });
-    </script>
+    }
+
+    function addMeal() {
+        const timeInput = document.getElementById('mealTime');
+        const carbsInput = document.getElementById('mealCarbs');
+        const time = parseInt(timeInput.value);
+        const carbs = parseFloat(carbsInput.value);
+        if (isNaN(time) || isNaN(carbs) || time < 0 || time >= 24 * 60 || carbs <= 0) {
+            alert("Please enter valid meal time (0-1439 minutes) and positive carbs.");
+            return;
+        }
+        mealsData.push({ time_minutes: time, carbs: carbs });
+        renderMealList();
+        timeInput.value = ''; carbsInput.value = '';
+    }
+
+    function removeMeal(index) {
+        mealsData.splice(index, 1);
+        renderMealList();
+    }
+
+    function renderMealList() {
+        const mealList = document.getElementById('mealList');
+        mealList.innerHTML = '';
+        mealsData.sort((a, b) => a.time_minutes - b.time_minutes);
+        mealsData.forEach((meal, index) => {
+            const listItem = document.createElement('li');
+            const mealTimeHours = Math.floor(meal.time_minutes / 60);
+            const mealTimeMins = meal.time_minutes % 60;
+            listItem.textContent = `Time: ${String(mealTimeHours).padStart(2, '0')}:${String(mealTimeMins).padStart(2, '0')} (${meal.time_minutes} min), Carbs: ${meal.carbs}g`;
+            const removeButton = document.createElement('button');
+            removeButton.textContent = 'Remove';
+            removeButton.className = 'remove-meal';
+            removeButton.onclick = () => removeMeal(index);
+            listItem.appendChild(removeButton);
+            mealList.appendChild(listItem);
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        populatePatientSelect();
+        initializeCharts();
+        document.getElementById('stopButton').disabled = true;
+    });
+
+    function initializeCharts() {
+        const commonOptions = {
+            chart: { type: 'spline', animation: Highcharts.svg, marginRight: 10 },
+            time: { useUTC: false },
+            title: { text: null },
+            accessibility: { announceNewData: { enabled: true, minAnnounceInterval: 1000, interruptUser: false }},
+            xAxis: { type: 'linear', title: { text: 'Simulation Step' }},
+            credits: { enabled: false },
+            plotOptions: { spline: { lineWidth: 2, states: { hover: { lineWidth: 3 } }, marker: { enabled: false }}},
+            legend: { enabled: true }
+        };
+
+        cgmChart = Highcharts.chart('cgmChart', Highcharts.merge(commonOptions, {
+            title: { text: 'CGM Levels' },
+            yAxis: {
+                title: { text: 'CGM (mg/dL)' },
+                min: 0, max: 600, tickInterval: 50,
+                plotLines: [
+                    { value: 70, color: 'orange', dashStyle: 'shortdash', width: 2, label: { text: 'Hypo (70)' }, id: 'yAxisHypoLine', zIndex: 4},
+                    { value: 180, color: 'red', dashStyle: 'shortdash', width: 2, label: { text: 'Hyper (180)' }, id: 'yAxisHyperLine', zIndex: 4}
+                ]
+            },
+            series: [
+                { name: 'PPO CGM', data: [], id: 'cgmSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
+                { name: 'PCPO CGM', data: [], id: 'cgmSeriesPCPO', color: Highcharts.getOptions().colors[1], visible: false },
+                { name: 'Switching CGM', data: [], id: 'cgmSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
+            ]
+        }));
+        cgmSeriesPPO = cgmChart.get('cgmSeriesPPO');
+        cgmSeriesPCPO = cgmChart.get('cgmSeriesPCPO');
+        cgmSeriesSwitching = cgmChart.get('cgmSeriesSwitching');
+
+        insulinChart = Highcharts.chart('insulinChart', Highcharts.merge(commonOptions, {
+            title: { text: 'Insulin Delivery' },
+            yAxis: { title: { text: 'Insulin (U)' }, min: 0 },
+            series: [
+                { name: 'PPO Insulin', data: [], id: 'insulinSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
+                { name: 'PCPO Insulin', data: [], id: 'insulinSeriesPCPO', color: Highcharts.getOptions().colors[1], visible: false },
+                { name: 'Switching Insulin', data: [], id: 'insulinSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
+            ]
+        }));
+        insulinSeriesPPO = insulinChart.get('insulinSeriesPPO');
+        insulinSeriesPCPO = insulinChart.get('insulinSeriesPCPO');
+        insulinSeriesSwitching = insulinChart.get('insulinSeriesSwitching');
+
+        rewardChart = Highcharts.chart('rewardChart', Highcharts.merge(commonOptions, {
+            title: { text: 'Rewards' },
+            yAxis: { title: { text: 'Reward Value' } },
+            series: [
+                { name: 'PPO Reward', data: [], id: 'rewardSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
+                { name: 'PCPO Reward', data: [], id: 'rewardSeriesPCPO', color: Highcharts.getOptions().colors[1], visible: false },
+                { name: 'Switching Reward', data: [], id: 'rewardSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
+            ]
+        }));
+        rewardSeriesPPO = rewardChart.get('rewardSeriesPPO');
+        rewardSeriesPCPO = rewardChart.get('rewardSeriesPCPO');
+        rewardSeriesSwitching = rewardChart.get('rewardSeriesSwitching');
+    }
+
+    function getSeriesForAlgo(algoTag) {
+        if (algoTag === 'ppo') return { cgm: cgmSeriesPPO, ins: insulinSeriesPPO, rew: rewardSeriesPPO };
+        if (algoTag === 'pcpo') return { cgm: cgmSeriesPCPO, ins: insulinSeriesPCPO, rew: rewardSeriesPCPO };
+        if (algoTag === 'switching') return { cgm: cgmSeriesSwitching, ins: insulinSeriesSwitching, rew: rewardSeriesSwitching };
+        return null;
+    }
+
+    function updateChartVisibility(algorithmsToDisplay) {
+        const allAlgoSeries = {
+            'ppo': { cgm: cgmSeriesPPO, ins: insulinSeriesPPO, rew: rewardSeriesPPO },
+            'pcpo': { cgm: cgmSeriesPCPO, ins: insulinSeriesPCPO, rew: rewardSeriesPCPO },
+            'switching': { cgm: cgmSeriesSwitching, ins: insulinSeriesSwitching, rew: rewardSeriesSwitching }
+        };
+        let needsOverallRedraw = false;
+        for (const algo in allAlgoSeries) {
+            const isVisible = algorithmsToDisplay.includes(algo);
+            if (allAlgoSeries[algo].cgm.visible !== isVisible) {
+                allAlgoSeries[algo].cgm.setVisible(isVisible, false);
+                allAlgoSeries[algo].ins.setVisible(isVisible, false);
+                allAlgoSeries[algo].rew.setVisible(isVisible, false);
+                needsOverallRedraw = true;
+            }
+        }
+        if (needsOverallRedraw) {
+            cgmChart.redraw(); insulinChart.redraw(); rewardChart.redraw();
+        }
+    }
+
+    socket.on('connect', () => { document.getElementById('status').textContent = 'Status: Connected.'; console.log('Socket connected'); });
+    socket.on('disconnect', () => { document.getElementById('status').textContent = 'Status: Disconnected.'; console.log('Socket disconnected'); });
+    socket.on('connection_ack', (data) => { console.log('Connection Acknowledged:', data.message); });
+
+    socket.on('simulation_starting_continuous', (data) => {
+        document.getElementById('status').textContent = `Status: ${data.message}`;
+        document.getElementById('progress').textContent = 'Progress: Initializing...';
+        document.getElementById('startButton').disabled = true;
+        document.getElementById('stopButton').disabled = false;
+
+        [cgmSeriesPPO, insulinSeriesPPO, rewardSeriesPPO,
+         cgmSeriesPCPO, insulinSeriesPCPO, rewardSeriesPCPO,
+         cgmSeriesSwitching, insulinSeriesSwitching, rewardSeriesSwitching].forEach(s => s.setData([], false));
+
+        currentXAxisMealPlotLines = [];
+        cgmChart.xAxis[0].update({ plotLines: [] }, true); 
+    });
+
+    socket.on('simulation_metadata', (data) => {
+        console.log("Simulation metadata:", data);
+        currentSimPatient = data.patient_name;
+        algorithmsInComparison = data.algorithms_compared; // This is a list of 2 algorithm names
+        simSamplingRate = data.sampling_rate || 5;
+        const algoNamesDisplay = algorithmsInComparison.map(a => a.toUpperCase()).join(" vs ");
+        document.getElementById('currentSimInfo').textContent =
+            `Comparing: ${algoNamesDisplay} for Patient ${currentSimPatient}`;
+        updateChartVisibility(algorithmsInComparison);
+    });
+
+    socket.on('simulation_data_point', (data) => {
+        let primaryActiveSeriesCGM;
+        // Determine a valid series for shift calculation based on which algo is active
+        if (algorithmsInComparison.includes(data.algo1_tag) && getSeriesForAlgo(data.algo1_tag) && getSeriesForAlgo(data.algo1_tag).cgm) {
+            primaryActiveSeriesCGM = getSeriesForAlgo(data.algo1_tag).cgm;
+        } else if (algorithmsInComparison.includes(data.algo2_tag) && getSeriesForAlgo(data.algo2_tag) && getSeriesForAlgo(data.algo2_tag).cgm) {
+            primaryActiveSeriesCGM = getSeriesForAlgo(data.algo2_tag).cgm;
+        } else {
+             // Fallback if something is odd, though an active series should always exist if data is coming
+            primaryActiveSeriesCGM = cgmSeriesPPO; 
+        }
+
+        const shouldShift = primaryActiveSeriesCGM.data.length > ((24 * 60 / simSamplingRate) * 1.5);
+
+        // Algo 1 Data
+        const series1 = getSeriesForAlgo(data.algo1_tag);
+        if (series1 && algorithmsInComparison.includes(data.algo1_tag)) { // Check if this algo is part of the current comparison
+            series1.cgm.addPoint([data.step, data.algo1_cgm], true, shouldShift);
+            series1.ins.addPoint([data.step, data.algo1_insulin], true, shouldShift);
+            series1.rew.addPoint([data.step, data.algo1_reward], true, shouldShift);
+        }
+
+        // Algo 2 Data
+        const series2 = getSeriesForAlgo(data.algo2_tag);
+        if (series2 && algorithmsInComparison.includes(data.algo2_tag)) {
+            series2.cgm.addPoint([data.step, data.algo2_cgm], true, shouldShift);
+            series2.ins.addPoint([data.step, data.algo2_insulin], true, shouldShift);
+            series2.rew.addPoint([data.step, data.algo2_reward], true, shouldShift);
+        }
+        document.getElementById('progress').textContent = `Progress: Step ${data.step}`;
+    });
+
+    socket.on('meal_markers', (data) => {
+        console.log("Meal markers received:", data.markers);
+        currentXAxisMealPlotLines = data.markers.map(marker => ({
+            value: marker.step,
+            color: 'green',
+            dashStyle: 'longdashdot',
+            width: 1.5,
+            label: {
+                text: `Meal: ${marker.carbs}g`,
+                align: 'center',
+                style: { color: 'green', fontSize: '10px' },
+                y: -7,
+                rotation: 0
+            },
+            zIndex: 5,
+            id: `mealStep-${marker.step}-${marker.carbs}`
+        }));
+        
+        cgmChart.xAxis[0].update({
+            plotLines: currentXAxisMealPlotLines
+        }, true); 
+    });
+
+    socket.on('simulation_progress', (data) => { document.getElementById('progress').textContent = `Progress: ${data.message}`; });
+
+    socket.on('simulation_finished', (data) => {
+        document.getElementById('status').textContent = `Status: ${data.message}`;
+        document.getElementById('progress').textContent = `Progress: Completed.`;
+        document.getElementById('startButton').disabled = false;
+        document.getElementById('stopButton').disabled = true;
+    });
+
+    socket.on('simulation_stopping_ack', (data) => { document.getElementById('status').textContent = `Status: ${data.message}`; });
+
+    socket.on('simulation_error', (data) => {
+        document.getElementById('status').textContent = `Error: ${data.error}`;
+        document.getElementById('progress').textContent = 'Progress: Halted due to error.';
+        alert(`Simulation Error: ${data.error}`);
+        document.getElementById('startButton').disabled = false;
+        document.getElementById('stopButton').disabled = true;
+    });
+
+    function startContinuousSimulation() {
+        const selectedComparisonMode = document.getElementById('comparisonModeSelect').value;
+        const selectedPatientId = document.getElementById('patientSelect').value;
+
+        if (mealsData.length === 0) {
+            if (confirm("No meals scheduled by user. Add a default meal (e.g., 50g at 8 AM) to proceed? If not, simulation will run with 0g meals.")) {
+                 if (mealsData.length === 0) { 
+                    mealsData.push({ time_minutes: 8 * 60, carbs: 50 }); 
+                    renderMealList(); 
+                    alert("Default meal (50g at 8 AM) added. You can remove or add more meals before starting.");
+                 }
+            }
+        }
+        
+        currentXAxisMealPlotLines = [];
+        cgmChart.xAxis[0].update({ plotLines: [] }, true);
+
+        console.log(`Starting simulation with Mode: ${selectedComparisonMode}, Patient: ${selectedPatientId}, Meals:`, mealsData);
+        socket.emit('start_continuous_simulation', {
+            meals: mealsData,
+            comparison_mode: selectedComparisonMode,
+            patient_id: selectedPatientId
+        });
+    }
+
+    function stopContinuousSimulation() {
+        console.log("Attempting to stop simulation...");
+        socket.emit('stop_continuous_simulation');
+        document.getElementById('status').textContent = 'Status: Stop signal sent...';
+    }
+
+</script>
 </body>
 </html>
