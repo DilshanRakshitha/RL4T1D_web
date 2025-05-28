@@ -6,6 +6,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script src="https://code.highcharts.com/highcharts.js"></script>
     <style>
+        /* ... (CSS styles remain the same) ... */
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
         .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         h1, h2 { color: #333; text-align: center; }
@@ -27,7 +28,7 @@
         #cgmChart { height: 500px; }
         #insulinChart, #rewardChart { height: 300px; }
 
-        #status, #progress { margin-top:10px; padding:10px; background-color: #e9ecef; border-radius:4px; text-align: center;}
+        #status, #progress, #algoStatus { margin-top:10px; padding:10px; background-color: #e9ecef; border-radius:4px; text-align: center;}
         ul#mealList { list-style-type: none; padding: 0; }
         ul#mealList li { background-color: #e9ecef; margin-bottom: 5px; padding: 8px; border-radius: 3px; display: flex; justify-content: space-between; align-items: center; }
         .remove-meal { background-color: #ffc107; color: black; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }
@@ -37,7 +38,7 @@
 <body>
     <div class="container">
         <h1>Type 1 Diabetes Reinforcement Learning Simulation</h1>
-
+        <!-- HTML Structure -->
         <div class="controls">
             <h2>Controls</h2>
             <div>
@@ -77,6 +78,7 @@
             <button id="stopButton" onclick="stopContinuousSimulation()" disabled>Stop Simulation</button>
             <div id="status">Status: Idle</div>
             <div id="progress">Progress: Waiting to start...</div>
+            <div id="algoStatus" style="color: red; font-weight: bold;"></div>
             <div id="currentSimInfo" style="margin-top:10px; font-weight:bold; text-align: center;"></div>
         </div>
 
@@ -91,21 +93,38 @@
     const socket = io({ transports: ['websocket', 'polling'] });
     let cgmChart, insulinChart, rewardChart;
 
-    let cgmSeriesPPO, insulinSeriesPPO, rewardSeriesPPO;
-    let cgmSeriesSRPO, insulinSeriesSRPO, rewardSeriesSRPO;
-    let cgmSeriesSwitching, insulinSeriesSwitching, rewardSeriesSwitching;
+    const seriesRefs = {
+        ppo: {}, srpo: {}, switching: {}
+    };
+    const algorithmLastValidStep = {
+        ppo: { cgm: -1, ins: -1, rew: -1 },
+        srpo: { cgm: -1, ins: -1, rew: -1 },
+        switching: { cgm: -1, ins: -1, rew: -1 }
+    };
+    const MIN_STEP_DIFFERENCE_FOR_BREAK = 3;
 
     let currentSimPatient = '';
-    let algorithmsInComparison = []; // e.g., ["ppo", "srpo"]
+    let algorithmsInComparison = [];
     let simSamplingRate = 5;
+    const ONE_DAY_IN_MINUTES = 24 * 60;
+    const RENDER_INTERVAL_MS = 50;
+    const AXIS_LEAD_MINUTES = 30;
+    const DATA_PLOT_OFFSET_MINUTES = 60;
+
+    let dataPointQueue = [];
+    let chartRenderInterval = null;
+    let simulationIsActive = false;
+    let currentDataActualTimeMaxForAxis = 0;
+    let allMealMarkersFromServer = [];
+    // let autoRestartTimer = null; // REMOVED
+
 
     const mealsData = [];
-    let currentXAxisMealPlotLines = []; // Holds definitions for meal plotlines
 
-    function populatePatientSelect() {
+    function populatePatientSelect() { /* ... same ... */
         const patientSelect = document.getElementById('patientSelect');
         const patientIds = [];
-        for (let i = 0; i <= 9; i++) patientIds.push(i.toString());
+        for (let i = 0; i <= 8; i++) patientIds.push(i.toString());
         for (let i = 20; i <= 29; i++) patientIds.push(i.toString());
         patientIds.forEach(id => {
             const option = document.createElement('option');
@@ -113,14 +132,16 @@
             option.textContent = `Patient ${id}`;
             patientSelect.appendChild(option);
         });
+        if (patientIds.length > 0) {
+            patientSelect.value = patientIds[0];
+        }
     }
-
-    function addMeal() {
+    function addMeal() { /* ... same ... */
         const timeInput = document.getElementById('mealTime');
         const carbsInput = document.getElementById('mealCarbs');
         const time = parseInt(timeInput.value);
         const carbs = parseFloat(carbsInput.value);
-        if (isNaN(time) || isNaN(carbs) || time < 0 || time >= 24 * 60 || carbs <= 0) {
+        if (isNaN(time) || isNaN(carbs) || time < 0 || time >= ONE_DAY_IN_MINUTES || carbs <= 0) {
             alert("Please enter valid meal time (0-1439 minutes) and positive carbs.");
             return;
         }
@@ -128,13 +149,11 @@
         renderMealList();
         timeInput.value = ''; carbsInput.value = '';
     }
-
-    function removeMeal(index) {
+    function removeMeal(index) { /* ... same ... */
         mealsData.splice(index, 1);
         renderMealList();
     }
-
-    function renderMealList() {
+    function renderMealList() { /* ... same ... */
         const mealList = document.getElementById('mealList');
         mealList.innerHTML = '';
         mealsData.sort((a, b) => a.time_minutes - b.time_minutes);
@@ -154,30 +173,88 @@
 
     document.addEventListener('DOMContentLoaded', function () {
         populatePatientSelect();
-        initializeCharts();
+        initializeAndClearCharts();
         document.getElementById('stopButton').disabled = true;
+        document.getElementById('startButton').disabled = false;
     });
 
-    function initializeCharts() {
-        const commonOptions = {
-            chart: { type: 'spline', animation: Highcharts.svg, marginRight: 10 },
+    function formatTimeFromMinutes(totalMinutes) { /* ... same ... */
+        const days = Math.floor(totalMinutes / ONE_DAY_IN_MINUTES);
+        const remainingMinutesInDay = totalMinutes % ONE_DAY_IN_MINUTES;
+        const hours = Math.floor(remainingMinutesInDay / 60);
+        const minutes = remainingMinutesInDay % 60;
+        let label = '';
+        if (days > 0) {
+            label += `Day ${days + 1}, `;
+        }
+        label += `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+        return label;
+    }
+    
+    function initializeAndClearCharts() {
+        currentDataActualTimeMaxForAxis = 0;
+        dataPointQueue = [];
+        allMealMarkersFromServer = [];
+        for (const algo in algorithmLastValidStep) {
+            algorithmLastValidStep[algo] = { cgm: -1, ins: -1, rew: -1 };
+        }
+
+        const initialXAxisMax = currentDataActualTimeMaxForAxis + AXIS_LEAD_MINUTES;
+        const initialXAxisMin = initialXAxisMax - ONE_DAY_IN_MINUTES;
+
+        const commonXAxisOptions = { /* ... same ... */
+            type: 'linear',
+            title: { text: 'Simulation Time (HH:MM within current day view)' },
+            min: initialXAxisMin,
+            max: initialXAxisMax,
+            labels: {
+                formatter: function () {
+                    const absoluteMinutes = this.value;
+                    const minutesInCurrentDayView = absoluteMinutes % ONE_DAY_IN_MINUTES;
+                    const positiveMinutesInDay = minutesInCurrentDayView < 0 ? minutesInCurrentDayView + ONE_DAY_IN_MINUTES : minutesInCurrentDayView;
+                    const hours = Math.floor(positiveMinutesInDay / 60);
+                    const minutes = positiveMinutesInDay % 60;
+                    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+                }
+            },
+            tickInterval: 3 * 60
+        };
+        const commonTooltipOptions = { /* ... same ... */
+             formatter: function () {
+                const plottedTime = this.x;
+                let actualTime = plottedTime;
+                const seriesId = this.series.options.id || '';
+                if (seriesId.includes("CGM") || seriesId.includes("Insulin") || seriesId.includes("Reward")) {
+                    actualTime = plottedTime - DATA_PLOT_OFFSET_MINUTES;
+                }
+                const timeLabel = formatTimeFromMinutes(actualTime);
+                const yValueDisplay = (this.y === null || this.y === undefined) ? 'N/A (gap)' : this.y.toFixed(2);
+                return `<b>${this.series.name}</b><br/>Actual Time: ${timeLabel}<br/>Value: ${yValueDisplay}`;
+            },
+            shared: false
+        };
+        const commonChartOptions = { /* ... same, ensure connectNulls: false ... */
+            chart: { type: 'spline', animation: false, marginRight: 10},
             time: { useUTC: false },
             title: { text: null },
-            accessibility: { announceNewData: { enabled: true, minAnnounceInterval: 1000, interruptUser: false }},
-            xAxis: { type: 'linear', title: { text: 'Simulation Step' }},
+            accessibility: { announceNewData: { enabled: false }},
+            xAxis: commonXAxisOptions,
+            tooltip: commonTooltipOptions,
             credits: { enabled: false },
-            plotOptions: { spline: { lineWidth: 2, states: { hover: { lineWidth: 3 } }, marker: { enabled: false }}},
+            plotOptions: {
+                series: { marker: { enabled: false, radius: 2 }, connectNulls: false },
+                spline: { lineWidth: 2, states: { hover: { lineWidth: 3 } } }
+            },
             legend: { enabled: true }
         };
 
-        cgmChart = Highcharts.chart('cgmChart', Highcharts.merge(commonOptions, {
-            title: { text: 'CGM Levels' },
+        cgmChart = Highcharts.chart('cgmChart', Highcharts.merge(commonChartOptions, { /* ... CGM specific ... */
+             title: { text: `CGM Levels (Data plotted ${DATA_PLOT_OFFSET_MINUTES}min ahead of actual time)` },
             yAxis: {
-                title: { text: 'CGM (mg/dL)' },
-                min: 0, max: 600, tickInterval: 50,
+                title: { text: 'CGM (mg/dL)' }, min: 0, max: 600, tickInterval: 50,
                 plotLines: [
-                    { value: 70, color: 'orange', dashStyle: 'shortdash', width: 2, label: { text: 'Hypo (70)' }, id: 'yAxisHypoLine', zIndex: 4},
-                    { value: 180, color: 'red', dashStyle: 'shortdash', width: 2, label: { text: 'Hyper (180)' }, id: 'yAxisHyperLine', zIndex: 4}
+                    { value: 70, color: 'orange', dashStyle: 'shortdash', width: 2, label: { text: 'Hypo (70)' }, id: 'yAxisHypoLineCGM', zIndex: 4},
+                    { value: 180, color: 'red', dashStyle: 'shortdash', width: 2, label: { text: 'Hyper (180)' }, id: 'yAxisHyperLineCGM', zIndex: 4}
                 ]
             },
             series: [
@@ -186,12 +263,12 @@
                 { name: 'Switching CGM', data: [], id: 'cgmSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
             ]
         }));
-        cgmSeriesPPO = cgmChart.get('cgmSeriesPPO');
-        cgmSeriesSRPO = cgmChart.get('cgmSeriesSRPO');
-        cgmSeriesSwitching = cgmChart.get('cgmSeriesSwitching');
+        seriesRefs.ppo.cgm = cgmChart.get('cgmSeriesPPO');
+        seriesRefs.srpo.cgm = cgmChart.get('cgmSeriesSRPO');
+        seriesRefs.switching.cgm = cgmChart.get('cgmSeriesSwitching');
 
-        insulinChart = Highcharts.chart('insulinChart', Highcharts.merge(commonOptions, {
-            title: { text: 'Insulin Delivery' },
+        insulinChart = Highcharts.chart('insulinChart', Highcharts.merge(commonChartOptions, { /* ... Insulin specific ... */
+            title: { text: `Insulin Delivery (Data plotted ${DATA_PLOT_OFFSET_MINUTES}min ahead)` },
             yAxis: { title: { text: 'Insulin (U)' }, min: 0 },
             series: [
                 { name: 'PPO Insulin', data: [], id: 'insulinSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
@@ -199,12 +276,12 @@
                 { name: 'Switching Insulin', data: [], id: 'insulinSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
             ]
         }));
-        insulinSeriesPPO = insulinChart.get('insulinSeriesPPO');
-        insulinSeriesSRPO = insulinChart.get('insulinSeriesSRPO');
-        insulinSeriesSwitching = insulinChart.get('insulinSeriesSwitching');
+        seriesRefs.ppo.ins = insulinChart.get('insulinSeriesPPO');
+        seriesRefs.srpo.ins = insulinChart.get('insulinSeriesSRPO');
+        seriesRefs.switching.ins = insulinChart.get('insulinSeriesSwitching');
 
-        rewardChart = Highcharts.chart('rewardChart', Highcharts.merge(commonOptions, {
-            title: { text: 'Rewards' },
+        rewardChart = Highcharts.chart('rewardChart', Highcharts.merge(commonChartOptions, { /* ... Reward specific ... */
+            title: { text: `Rewards (Data plotted ${DATA_PLOT_OFFSET_MINUTES}min ahead)` },
             yAxis: { title: { text: 'Reward Value' } },
             series: [
                 { name: 'PPO Reward', data: [], id: 'rewardSeriesPPO', color: Highcharts.getOptions().colors[0], visible: false },
@@ -212,173 +289,304 @@
                 { name: 'Switching Reward', data: [], id: 'rewardSeriesSwitching', color: Highcharts.getOptions().colors[2], visible: false }
             ]
         }));
-        rewardSeriesPPO = rewardChart.get('rewardSeriesPPO');
-        rewardSeriesSRPO = rewardChart.get('rewardSeriesSRPO');
-        rewardSeriesSwitching = rewardChart.get('rewardSeriesSwitching');
+        seriesRefs.ppo.rew = rewardChart.get('rewardSeriesPPO');
+        seriesRefs.srpo.rew = rewardChart.get('rewardSeriesSRPO');
+        seriesRefs.switching.rew = rewardChart.get('rewardSeriesSwitching');
+
+        updateChartVisibility(algorithmsInComparison);
     }
 
-    function getSeriesForAlgo(algoTag) {
-        if (algoTag === 'ppo') return { cgm: cgmSeriesPPO, ins: insulinSeriesPPO, rew: rewardSeriesPPO };
-        if (algoTag === 'srpo') return { cgm: cgmSeriesSRPO, ins: insulinSeriesSRPO, rew: rewardSeriesSRPO };
-        if (algoTag === 'switching') return { cgm: cgmSeriesSwitching, ins: insulinSeriesSwitching, rew: rewardSeriesSwitching };
-        return null;
-    }
-
-    function updateChartVisibility(algorithmsToDisplay) {
-        const allAlgoSeries = {
-            'ppo': { cgm: cgmSeriesPPO, ins: insulinSeriesPPO, rew: rewardSeriesPPO },
-            'srpo': { cgm: cgmSeriesSRPO, ins: insulinSeriesSRPO, rew: rewardSeriesSRPO },
-            'switching': { cgm: cgmSeriesSwitching, ins: insulinSeriesSwitching, rew: rewardSeriesSwitching }
-        };
+    function getSeriesForAlgo(algoTag) { return seriesRefs[algoTag] || null; }
+    function updateChartVisibility(algorithmsToDisplay) { /* ... same ... */
         let needsOverallRedraw = false;
-        for (const algo in allAlgoSeries) {
+        for (const algo in seriesRefs) {
             const isVisible = algorithmsToDisplay.includes(algo);
-            if (allAlgoSeries[algo].cgm.visible !== isVisible) {
-                allAlgoSeries[algo].cgm.setVisible(isVisible, false);
-                allAlgoSeries[algo].ins.setVisible(isVisible, false);
-                allAlgoSeries[algo].rew.setVisible(isVisible, false);
+            if (seriesRefs[algo] && seriesRefs[algo].cgm && seriesRefs[algo].cgm.visible !== isVisible) {
+                seriesRefs[algo].cgm.setVisible(isVisible, false);
+                if(seriesRefs[algo].ins) seriesRefs[algo].ins.setVisible(isVisible, false);
+                if(seriesRefs[algo].rew) seriesRefs[algo].rew.setVisible(isVisible, false);
                 needsOverallRedraw = true;
             }
         }
         if (needsOverallRedraw) {
-            cgmChart.redraw(); insulinChart.redraw(); rewardChart.redraw();
+            if (cgmChart) cgmChart.redraw();
+            if (insulinChart) insulinChart.redraw();
+            if (rewardChart) rewardChart.redraw();
         }
     }
 
-    socket.on('connect', () => { document.getElementById('status').textContent = 'Status: Connected.'; console.log('Socket connected'); });
-    socket.on('disconnect', () => { document.getElementById('status').textContent = 'Status: Disconnected.'; console.log('Socket disconnected'); });
-    socket.on('connection_ack', (data) => { console.log('Connection Acknowledged:', data.message); });
+    function redrawAllPlotLines() { /* ... same as before ... */
+        const chartsToUpdate = [cgmChart, insulinChart, rewardChart];
 
-    socket.on('simulation_starting_continuous', (data) => {
-        document.getElementById('status').textContent = `Status: ${data.message}`;
-        document.getElementById('progress').textContent = 'Progress: Initializing...';
-        document.getElementById('startButton').disabled = true;
-        document.getElementById('stopButton').disabled = false;
+        chartsToUpdate.forEach(chart => {
+            if (chart && chart.xAxis[0]) {
+                const xAxis = chart.xAxis[0];
+                const currentAxisMin = xAxis.getExtremes().min;
+                const currentAxisMax = xAxis.getExtremes().max;
 
-        [cgmSeriesPPO, insulinSeriesPPO, rewardSeriesPPO,
-         cgmSeriesSRPO, insulinSeriesSRPO, rewardSeriesSRPO,
-         cgmSeriesSwitching, insulinSeriesSwitching, rewardSeriesSwitching].forEach(s => s.setData([], false));
+                const plotLinesAndBandsCopy = [...(xAxis.plotLinesAndBands || [])];
+                plotLinesAndBandsCopy.forEach(pb => {
+                    if (pb.options.id && (pb.options.id.startsWith(`mealStep-${chart.renderTo.id}-`) || pb.options.id.startsWith(`daySep-${chart.renderTo.id}-`))) {
+                        try { xAxis.removePlotLine(pb.options.id); } catch(e) { console.warn("Error removing plotline:", e); }
+                    }
+                });
 
-        currentXAxisMealPlotLines = [];
-        cgmChart.xAxis[0].update({ plotLines: [] }, true); 
-    });
+                allMealMarkersFromServer.forEach(marker => {
+                    const timeInMinutes = marker.step * simSamplingRate;
+                    if (timeInMinutes >= currentAxisMin && timeInMinutes <= currentAxisMax) {
+                        xAxis.addPlotLine({
+                            value: timeInMinutes, color: 'rgba(0,128,0,0.8)', dashStyle: 'longdash', width: 2,
+                            label: { text: `${marker.carbs}g`, align: 'center', style: { color: 'darkgreen', fontSize: '10px', fontWeight: 'bold' }, y: -10, rotation: 0 },
+                            zIndex: 5, id: `mealStep-${chart.renderTo.id}-${marker.step}-${marker.carbs}`
+                        });
+                    }
+                });
 
-    socket.on('simulation_metadata', (data) => {
-        console.log("Simulation metadata:", data);
-        currentSimPatient = data.patient_name;
-        algorithmsInComparison = data.algorithms_compared; // This is a list of 2 algorithm names
-        simSamplingRate = data.sampling_rate || 5;
-        const algoNamesDisplay = algorithmsInComparison.map(a => a.toUpperCase()).join(" vs ");
-        document.getElementById('currentSimInfo').textContent =
-            `Comparing: ${algoNamesDisplay} for Patient ${currentSimPatient}`;
-        updateChartVisibility(algorithmsInComparison);
-    });
+                let dayMarkerTime = 0;
+                for (let i = 0; i < 100; i++) {
+                    dayMarkerTime = i * ONE_DAY_IN_MINUTES;
+                    if (dayMarkerTime > currentAxisMax + ONE_DAY_IN_MINUTES && i > 1) break;
+                    if (dayMarkerTime < currentAxisMin - ONE_DAY_IN_MINUTES && i > 1) continue;
 
-    socket.on('simulation_data_point', (data) => {
-        let primaryActiveSeriesCGM;
-        // Determine a valid series for shift calculation based on which algo is active
-        if (algorithmsInComparison.includes(data.algo1_tag) && getSeriesForAlgo(data.algo1_tag) && getSeriesForAlgo(data.algo1_tag).cgm) {
-            primaryActiveSeriesCGM = getSeriesForAlgo(data.algo1_tag).cgm;
-        } else if (algorithmsInComparison.includes(data.algo2_tag) && getSeriesForAlgo(data.algo2_tag) && getSeriesForAlgo(data.algo2_tag).cgm) {
-            primaryActiveSeriesCGM = getSeriesForAlgo(data.algo2_tag).cgm;
-        } else {
-             // Fallback if something is odd, though an active series should always exist if data is coming
-            primaryActiveSeriesCGM = cgmSeriesPPO; 
+
+                    if (dayMarkerTime >= currentAxisMin && dayMarkerTime <= currentAxisMax) {
+                        const id = `daySep-${chart.renderTo.id}-${dayMarkerTime}`;
+                        xAxis.addPlotLine({
+                            value: dayMarkerTime, color: 'rgba(0,0,0,0.5)', dashStyle: 'dot', width: 1.5,
+                            label: { text: `Day ${i + 1}`, align: (i === 0 && dayMarkerTime < (currentAxisMin + 60)) || (dayMarkerTime < currentAxisMin + 60) ? 'left' : 'right',
+                                     x: (i === 0 && dayMarkerTime < (currentAxisMin + 60)) || (dayMarkerTime < currentAxisMin + 60) ? 5 : -5,
+                                     y: 15, style: {fontSize: '9px'} },
+                            zIndex: 3, id: id
+                        });
+                    }
+                }
+            }
+        });
+    }
+
+    function addDataPointWithBreakLogic(algoTag, dataType, seriesRef, currentActualTime, dataValue, plottedTime, shift) { /* ... same ... */
+        if (!seriesRef) return false;
+        let pointAdded = false;
+        if (dataValue !== null) {
+            if (algorithmLastValidStep[algoTag][dataType] !== -1 &&
+                (currentActualTime - algorithmLastValidStep[algoTag][dataType]) > (MIN_STEP_DIFFERENCE_FOR_BREAK * simSamplingRate)) {
+                seriesRef.addPoint([plottedTime - simSamplingRate, null], false, shift);
+                console.log(`Inserted NULL break for ${algoTag}-${dataType} at plotted time ${plottedTime - simSamplingRate}`);
+            }
+            seriesRef.addPoint([plottedTime, dataValue], false, shift);
+            algorithmLastValidStep[algoTag][dataType] = currentActualTime;
+            pointAdded = true;
         }
+        return pointAdded;
+    }
 
-        const shouldShift = primaryActiveSeriesCGM.data.length > ((24 * 60 / simSamplingRate) * 1.5);
+    function startChartRenderLoop() {
+        if (chartRenderInterval) clearInterval(chartRenderInterval);
+        simulationIsActive = true;
 
-        // Algo 1 Data
-        const series1 = getSeriesForAlgo(data.algo1_tag);
-        if (series1 && algorithmsInComparison.includes(data.algo1_tag)) { // Check if this algo is part of the current comparison
-            series1.cgm.addPoint([data.step, data.algo1_cgm], true, shouldShift);
-            series1.ins.addPoint([data.step, data.algo1_insulin], true, shouldShift);
-            series1.rew.addPoint([data.step, data.algo1_reward], true, shouldShift);
+        chartRenderInterval = setInterval(() => {
+            if (!simulationIsActive && dataPointQueue.length === 0) {
+                clearInterval(chartRenderInterval);
+                chartRenderInterval = null;
+                return;
+            }
+
+            let pointToPlot = null;
+            if (dataPointQueue.length > 0) {
+                pointToPlot = dataPointQueue.shift();
+            }
+
+            let targetActualDataTime;
+
+            if (pointToPlot) {
+                targetActualDataTime = pointToPlot.step * simSamplingRate;
+                currentDataActualTimeMaxForAxis = Math.max(currentDataActualTimeMaxForAxis, targetActualDataTime);
+            } else if (simulationIsActive) {
+                currentDataActualTimeMaxForAxis += simSamplingRate;
+                targetActualDataTime = currentDataActualTimeMaxForAxis;
+            } else {
+                return;
+            }
+
+            const newXAxisMax = currentDataActualTimeMaxForAxis + AXIS_LEAD_MINUTES;
+            const newXAxisMin = newXAxisMax - ONE_DAY_IN_MINUTES;
+            let xAxisUpdated = false;
+
+            if (cgmChart && (Math.abs(cgmChart.xAxis[0].options.max - newXAxisMax) > simSamplingRate / 2 || Math.abs(cgmChart.xAxis[0].options.min - newXAxisMin) > simSamplingRate / 2 )) {
+                 xAxisUpdated = true;
+            }
+
+            if (xAxisUpdated) {
+                [cgmChart, insulinChart, rewardChart].forEach(chart => {
+                    if (chart) {
+                        chart.xAxis[0].setExtremes(newXAxisMin, newXAxisMax, false, false);
+                    }
+                });
+                redrawAllPlotLines();
+            }
+
+            let dataPlottedThisTick = false;
+            if (pointToPlot) {
+                const actualTimeInMinutes = pointToPlot.step * simSamplingRate;
+                const plottedTimeInMinutes = actualTimeInMinutes + DATA_PLOT_OFFSET_MINUTES;
+                const maxPointsInMemory = (ONE_DAY_IN_MINUTES / simSamplingRate) * 2;
+
+                const series1 = getSeriesForAlgo(pointToPlot.algo1_tag);
+                if (series1 && algorithmsInComparison.includes(pointToPlot.algo1_tag)) {
+                    const shift = series1.cgm && series1.cgm.data.length >= maxPointsInMemory;
+                    if(addDataPointWithBreakLogic(pointToPlot.algo1_tag, 'cgm', series1.cgm, actualTimeInMinutes, pointToPlot.algo1_cgm, plottedTimeInMinutes, shift)) dataPlottedThisTick = true;
+                    if(addDataPointWithBreakLogic(pointToPlot.algo1_tag, 'ins', series1.ins, actualTimeInMinutes, pointToPlot.algo1_insulin, plottedTimeInMinutes, shift)) dataPlottedThisTick = true;
+                    if(addDataPointWithBreakLogic(pointToPlot.algo1_tag, 'rew', series1.rew, actualTimeInMinutes, pointToPlot.algo1_reward, plottedTimeInMinutes, shift)) dataPlottedThisTick = true;
+                }
+                const series2 = getSeriesForAlgo(pointToPlot.algo2_tag);
+                if (series2 && algorithmsInComparison.includes(pointToPlot.algo2_tag)) {
+                    const shift = series2.cgm && series2.cgm.data.length >= maxPointsInMemory;
+                    if(addDataPointWithBreakLogic(pointToPlot.algo2_tag, 'cgm', series2.cgm, actualTimeInMinutes, pointToPlot.algo2_cgm, plottedTimeInMinutes, shift)) dataPlottedThisTick = true;
+                    if(addDataPointWithBreakLogic(pointToPlot.algo2_tag, 'ins', series2.ins, actualTimeInMinutes, pointToPlot.algo2_insulin, plottedTimeInMinutes, shift)) dataPlottedThisTick = true;
+                    if(addDataPointWithBreakLogic(pointToPlot.algo2_tag, 'rew', series2.rew, actualTimeInMinutes, pointToPlot.algo2_reward, plottedTimeInMinutes, shift)) dataPlottedThisTick = true;
+                }
+                document.getElementById('progress').textContent = `Displaying (actual time): ${formatTimeFromMinutes(actualTimeInMinutes)} (Step: ${pointToPlot.step}) | Queue: ${dataPointQueue.length}`;
+            } else if (simulationIsActive) {
+                 document.getElementById('progress').textContent = `Viewing up to (actual time): ${formatTimeFromMinutes(currentDataActualTimeMaxForAxis + AXIS_LEAD_MINUTES)} (Waiting for data...)`;
+            }
+
+            if (xAxisUpdated || dataPlottedThisTick) {
+                 [cgmChart, insulinChart, rewardChart].forEach(chart => { if (chart) chart.redraw(); });
+            }
+
+        }, RENDER_INTERVAL_MS);
+    }
+
+    function stopChartRenderLoop() { /* ... same ... */
+        simulationIsActive = false;
+        if (chartRenderInterval) {
+            clearInterval(chartRenderInterval);
+            chartRenderInterval = null;
         }
+    }
 
-        // Algo 2 Data
-        const series2 = getSeriesForAlgo(data.algo2_tag);
-        if (series2 && algorithmsInComparison.includes(data.algo2_tag)) {
-            series2.cgm.addPoint([data.step, data.algo2_cgm], true, shouldShift);
-            series2.ins.addPoint([data.step, data.algo2_insulin], true, shouldShift);
-            series2.rew.addPoint([data.step, data.algo2_reward], true, shouldShift);
-        }
-        document.getElementById('progress').textContent = `Progress: Step ${data.step}`;
-    });
-
-    socket.on('meal_markers', (data) => {
-        console.log("Meal markers received:", data.markers);
-        currentXAxisMealPlotLines = data.markers.map(marker => ({
-            value: marker.step,
-            color: 'green',
-            dashStyle: 'longdashdot',
-            width: 1.5,
-            label: {
-                text: `Meal: ${marker.carbs}g`,
-                align: 'center',
-                style: { color: 'green', fontSize: '10px' },
-                y: -7,
-                rotation: 0
-            },
-            zIndex: 5,
-            id: `mealStep-${marker.step}-${marker.carbs}`
-        }));
-        
-        cgmChart.xAxis[0].update({
-            plotLines: currentXAxisMealPlotLines
-        }, true); 
-    });
-
-    socket.on('simulation_progress', (data) => { document.getElementById('progress').textContent = `Progress: ${data.message}`; });
-
-    socket.on('simulation_finished', (data) => {
-        document.getElementById('status').textContent = `Status: ${data.message}`;
-        document.getElementById('progress').textContent = `Progress: Completed.`;
+    // Socket Event Handlers
+    socket.on('connect', () => { document.getElementById('status').textContent = 'Status: Connected.'; });
+    socket.on('disconnect', () => { /* ... same ... */
+        document.getElementById('status').textContent = 'Status: Disconnected.';
+        stopChartRenderLoop();
         document.getElementById('startButton').disabled = false;
         document.getElementById('stopButton').disabled = true;
     });
+    socket.on('connection_ack', (data) => { console.log('Connection Acknowledged:', data.message); });
 
-    socket.on('simulation_stopping_ack', (data) => { document.getElementById('status').textContent = `Status: ${data.message}`; });
+    socket.on('simulation_starting_continuous', (data) => { /* ... same ... */
+        document.getElementById('status').textContent = `Status: ${data.message}`;
+        document.getElementById('progress').textContent = 'Progress: Initializing...';
+        document.getElementById('algoStatus').textContent = '';
+        document.getElementById('startButton').disabled = true;
+        document.getElementById('stopButton').disabled = false;
+        allMealMarkersFromServer = [];
+    });
 
-    socket.on('simulation_error', (data) => {
-        document.getElementById('status').textContent = `Error: ${data.error}`;
+    socket.on('clear_visualization', () => { /* ... same ... */
+        console.log("Received clear_visualization event.");
+        stopChartRenderLoop();
+        initializeAndClearCharts();
+    });
+
+    socket.on('simulation_metadata', (data) => { /* ... same ... */
+        console.log("Simulation metadata:", data);
+        currentSimPatient = data.patient_name;
+        algorithmsInComparison = data.algorithms_compared;
+        simSamplingRate = data.sampling_rate || 5;
+
+        const algoNamesDisplay = algorithmsInComparison.map(a => a.toUpperCase()).join(" vs ");
+        document.getElementById('currentSimInfo').textContent =
+            `Comparing: ${algoNamesDisplay} for Patient ${currentSimPatient} (Sample Rate: ${simSamplingRate} min/step)`;
+        updateChartVisibility(algorithmsInComparison);
+
+        stopChartRenderLoop();
+        initializeAndClearCharts();
+        startChartRenderLoop();
+    });
+
+    socket.on('simulation_data_point', (data) => { /* ... same ... */
+        dataPointQueue.push(data);
+        if (!chartRenderInterval && simulationIsActive) {
+            startChartRenderLoop();
+        }
+    });
+
+    socket.on('meal_markers', (data) => { /* ... same ... */
+        console.log("Meal markers received from server:", data.markers);
+        allMealMarkersFromServer = data.markers;
+        redrawAllPlotLines();
+        if (cgmChart) cgmChart.redraw();
+        if (insulinChart) insulinChart.redraw();
+        if (rewardChart) rewardChart.redraw();
+    });
+
+    socket.on('simulation_progress', (data) => { console.log("Sim Progress Msg:", data.message); });
+    socket.on('algorithm_status_update', (data) => { /* ... same ... */
+        console.log("Algorithm Status:", data);
+        const algoStatusDiv = document.getElementById('algoStatus');
+        const newMessage = `ALERT: Algorithm ${data.algorithm.toUpperCase()} failed. ${data.message}`;
+        algoStatusDiv.textContent = newMessage;
+    });
+    socket.on('simulation_finished', (data) => { /* ... same ... */
+        document.getElementById('status').textContent = `Status: ${data.message}`;
+        const lastTimeFormatted = dataPointQueue.length > 0 ? formatTimeFromMinutes(dataPointQueue[dataPointQueue.length-1].step * simSamplingRate) : formatTimeFromMinutes(currentDataActualTimeMaxForAxis + AXIS_LEAD_MINUTES);
+        document.getElementById('progress').textContent = `Progress: Completed. Viewing up to ${lastTimeFormatted}. Queue: ${dataPointQueue.length}`;
+        document.getElementById('startButton').disabled = false;
+        document.getElementById('stopButton').disabled = true;
+        document.getElementById('algoStatus').textContent = '';
+        simulationIsActive = false;
+    });
+    socket.on('simulation_stopping_ack', (data) => { /* ... same ... */
+        document.getElementById('status').textContent = `Status: ${data.message}`;
+        simulationIsActive = false;
+    });
+    socket.on('simulation_error', (data) => { /* ... same ... */
+        const errorMsg = data.error || "An unknown error occurred.";
+        document.getElementById('status').textContent = `Error: ${errorMsg}`;
         document.getElementById('progress').textContent = 'Progress: Halted due to error.';
-        alert(`Simulation Error: ${data.error}`);
+        if (!document.getElementById('algoStatus').textContent) {
+            document.getElementById('algoStatus').textContent = `ERROR: ${errorMsg}`;
+        }
+        alert(`Simulation Error: ${errorMsg}`);
+        stopChartRenderLoop();
         document.getElementById('startButton').disabled = false;
         document.getElementById('stopButton').disabled = true;
     });
 
     function startContinuousSimulation() {
+        // REMOVED autoRestartTimer check
+        if (document.getElementById('startButton').disabled) {
+            console.log("Start button is disabled, likely a simulation is in progress or stopping.");
+            return;
+        }
+
         const selectedComparisonMode = document.getElementById('comparisonModeSelect').value;
         const selectedPatientId = document.getElementById('patientSelect').value;
 
         if (mealsData.length === 0) {
-            if (confirm("No meals scheduled by user. Add a default meal (e.g., 50g at 8 AM) to proceed? If not, simulation will run with 0g meals.")) {
-                 if (mealsData.length === 0) { 
-                    mealsData.push({ time_minutes: 8 * 60, carbs: 50 }); 
-                    renderMealList(); 
-                    alert("Default meal (50g at 8 AM) added. You can remove or add more meals before starting.");
-                 }
+            const confirmDefaultMeal = confirm("No meals scheduled. Add default (50g @ 480 min)? Else, scenario defaults apply.");
+            if (confirmDefaultMeal) {
+                 mealsData.push({ time_minutes: 480, carbs: 50 });
+                 renderMealList();
             }
         }
-        
-        currentXAxisMealPlotLines = [];
-        cgmChart.xAxis[0].update({ plotLines: [] }, true);
-
-        console.log(`Starting simulation with Mode: ${selectedComparisonMode}, Patient: ${selectedPatientId}, Meals:`, mealsData);
+        console.log(`Starting simulation: Mode: ${selectedComparisonMode}, Patient: ${selectedPatientId}, Meals:`, mealsData);
         socket.emit('start_continuous_simulation', {
             meals: mealsData,
             comparison_mode: selectedComparisonMode,
             patient_id: selectedPatientId
         });
     }
-
     function stopContinuousSimulation() {
-        console.log("Attempting to stop simulation...");
+        // REMOVED autoRestartTimer check
+        console.log("Attempting to stop simulation manually...");
+        simulationIsActive = false;
         socket.emit('stop_continuous_simulation');
-        document.getElementById('status').textContent = 'Status: Stop signal sent...';
+        document.getElementById('status').textContent = 'Status: Manual stop signal sent...';
+        document.getElementById('stopButton').disabled = true;
     }
-
 </script>
 </body>
 </html>

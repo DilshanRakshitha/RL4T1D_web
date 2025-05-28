@@ -9,7 +9,7 @@ class T1DEnv:
         self.worker_mode = mode
         self.worker_id = worker_id
         self.state = 0
-        print('inside env, -------------------', args)
+        # print('inside env, -------------------', args)
         self.env = get_env(args, worker_id=worker_id, env_type=mode)  # setup environment
         self.reset()
 
